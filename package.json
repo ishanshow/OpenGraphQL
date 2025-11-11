@@ -1,0 +1,48 @@
+{
+  "name": "apollo-subgraph-generator",
+  "version": "1.0.0",
+  "description": "Automated Apollo GraphQL subgraph generator for MongoDB, SQL, and REST API data sources",
+  "main": "dist/index.js",
+  "bin": {
+    "subgraph-gen": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/cli.ts",
+    "start": "node dist/cli.js",
+    "generate": "tsx src/cli.ts generate",
+    "serve": "tsx src/cli.ts serve",
+    "test": "tsx src/cli.ts test"
+  },
+  "keywords": [
+    "apollo",
+    "graphql",
+    "subgraph",
+    "federation",
+    "mongodb",
+    "sql",
+    "rest-api",
+    "code-generation"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@apollo/server": "^4.10.0",
+    "@apollo/subgraph": "^2.7.0",
+    "axios": "^1.6.5",
+    "chalk": "^4.1.2",
+    "commander": "^12.0.0",
+    "dotenv": "^16.4.1",
+    "graphql": "^16.8.1",
+    "graphql-tag": "^2.12.6",
+    "mongodb": "^6.3.0",
+    "mysql2": "^3.9.0",
+    "pg": "^8.11.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.10",
+    "@types/pg": "^8.15.6",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}

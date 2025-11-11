@@ -1,0 +1,417 @@
+# Apollo Subgraph Generator
+
+A lean, powerful tool that automates Apollo GraphQL subgraph creation from various data sources including MongoDB, PostgreSQL, MySQL, and REST APIs.
+
+## ✨ Features
+
+- **Multi-Source Support**: MongoDB, PostgreSQL, MySQL, and REST APIs
+- **Automatic Schema Introspection**: Analyzes data sources and generates GraphQL schemas
+- **Apollo Federation Ready**: Built-in support for Apollo Federation v2
+- **Environment-Based Configuration**: All configuration via .env file
+- **Cross-Platform Compatible**: Works on Windows, macOS, and Linux
+- **Zero Interactive Prompts**: Perfect for CI/CD and containers
+- **Type-Safe**: Built with TypeScript
+
+## 📦 Installation
+
+```bash
+npm install -g apollo-subgraph-generator
+```
+
+Or use locally in your project:
+
+```bash
+npm install apollo-subgraph-generator
+```
+
+## 🚀 Quick Start
+
+### 1. Create .env File
+
+Copy `.env.example` to `.env` and configure your data source:
+
+```env
+DATASOURCE_TYPE=mongodb
+MONGODB_URI=mongodb://localhost:27017
+MONGODB_DATABASE=mydb
+SERVER_PORT=4000
+```
+
+### 2. Run the Server
+
+```bash
+npx subgraph-gen serve
+```
+
+That's it! Your GraphQL server is running at `http://localhost:4000`
+
+**Open Apollo Sandbox** in your browser to test queries immediately!
+
+See [TESTING.md](TESTING.md) for detailed testing instructions and example queries.
+
+## ⚙️ Configuration
+
+All configuration is done via environment variables in your `.env` file.
+
+### Required Variables
+
+| Variable | Description | Values |
+|----------|-------------|---------|
+| `DATASOURCE_TYPE` | Type of data source | `mongodb`, `postgres`, `mysql`, `rest` |
+
+### MongoDB Configuration
+
+When `DATASOURCE_TYPE=mongodb`:
+
+```env
+DATASOURCE_TYPE=mongodb
+DATASOURCE_NAME=mongodb
+MONGODB_URI=mongodb://localhost:27017
+MONGODB_DATABASE=mydb
+
+# Optional: Specific collections to introspect (comma-separated)
+MONGODB_COLLECTIONS=users,products,orders
+```
+
+### PostgreSQL Configuration
+
+When `DATASOURCE_TYPE=postgres`:
+
+```env
+DATASOURCE_TYPE=postgres
+DATASOURCE_NAME=postgres
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DATABASE=mydb
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=your_password
+POSTGRES_SCHEMA=public
+
+# Optional: Specific tables to introspect (comma-separated)
+POSTGRES_TABLES=users,products,orders
+```
+
+### MySQL Configuration
+
+When `DATASOURCE_TYPE=mysql`:
+
+```env
+DATASOURCE_TYPE=mysql
+DATASOURCE_NAME=mysql
+MYSQL_HOST=localhost
+MYSQL_PORT=3306
+MYSQL_DATABASE=mydb
+MYSQL_USER=root
+MYSQL_PASSWORD=your_password
+
+# Optional: Specific tables to introspect (comma-separated)
+MYSQL_TABLES=users,products,orders
+```
+
+### REST API Configuration
+
+When `DATASOURCE_TYPE=rest`:
+
+```env
+DATASOURCE_TYPE=rest
+DATASOURCE_NAME=api
+REST_BASE_URL=https://api.example.com
+REST_AUTH_TOKEN=your_bearer_token
+
+# Required: Endpoints as JSON array
+REST_ENDPOINTS=[{"path":"/users","method":"GET","queryName":"users"},{"path":"/posts","method":"GET","queryName":"posts"}]
+
+# Optional: Custom headers as JSON
+REST_HEADERS={"X-Custom-Header":"value"}
+```
+
+### Server Configuration
+
+```env
+SERVER_PORT=4000
+OUTPUT_DIR=./generated
+
+# Optional: Apollo Federation
+APOLLO_GRAPH_REF=my-graph@current
+APOLLO_KEY=service:my-graph:your-api-key
+```
+
+## 🎯 Usage
+
+### Start the GraphQL Server
+
+```bash
+npx subgraph-gen serve
+```
+
+Options:
+- `-p, --port <number>`: Override port from .env
+
+Example:
+```bash
+npx subgraph-gen serve --port 5000
+```
+
+### Generate Schema Files
+
+Generate GraphQL schema, resolvers, and server files without starting the server:
+
+```bash
+npx subgraph-gen generate
+```
+
+Options:
+- `-o, --output <path>`: Override output directory from .env
+
+Example:
+```bash
+npx subgraph-gen generate --output ./my-schema
+```
+
+This creates:
+- `schema.graphql` - GraphQL type definitions
+- `resolvers.ts` - Generated resolvers
+- `server.ts` - Apollo Server setup
+- `datasources.json` - Data source metadata
+
+### Test Connections
+
+Test your data source connections without starting the server:
+
+```bash
+npx subgraph-gen test
+```
+
+## 🐳 Container Support (Podman/Docker)
+
+The tool works seamlessly in containers.
+
+### Using Podman
+
+Build image:
+```bash
+podman build -t apollo-subgraph-gen .
+```
+
+Run with .env file:
+```bash
+podman run --env-file .env -p 4000:4000 apollo-subgraph-gen serve
+```
+
+### Using Docker
+
+Build image:
+```bash
+docker build -t apollo-subgraph-gen .
+```
+
+Run with .env file:
+```bash
+docker run --env-file .env -p 4000:4000 apollo-subgraph-gen serve
+```
+
+## 🖥️ Cross-Platform Compatibility
+
+This tool is designed to work consistently across all operating systems:
+
+### Windows
+```powershell
+# PowerShell
+npm run serve
+
+# Command Prompt
+npm run serve
+```
+
+### macOS/Linux
+```bash
+npm run serve
+```
+
+### Environment Variables on Different Platforms
+
+**Windows PowerShell:**
+```powershell
+$env:DATASOURCE_TYPE="mongodb"
+npm run serve
+```
+
+**Windows Command Prompt:**
+```cmd
+set DATASOURCE_TYPE=mongodb
+npm run serve
+```
+
+**macOS/Linux/Git Bash:**
+```bash
+export DATASOURCE_TYPE=mongodb
+npm run serve
+```
+
+**Best Practice:** Use a `.env` file for all platforms (recommended)
+
+## 📝 Examples
+
+### Example 1: MongoDB
+
+`.env`:
+```env
+DATASOURCE_TYPE=mongodb
+MONGODB_URI=mongodb://localhost:27017
+MONGODB_DATABASE=ecommerce
+MONGODB_COLLECTIONS=users,products
+SERVER_PORT=4000
+```
+
+### Example 2: PostgreSQL
+
+`.env`:
+```env
+DATASOURCE_TYPE=postgres
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DATABASE=warehouse
+POSTGRES_USER=admin
+POSTGRES_PASSWORD=secret123
+POSTGRES_SCHEMA=public
+SERVER_PORT=4000
+```
+
+### Example 3: REST API
+
+`.env`:
+```env
+DATASOURCE_TYPE=rest
+REST_BASE_URL=https://jsonplaceholder.typicode.com
+REST_ENDPOINTS=[{"path":"/users","method":"GET","queryName":"users"},{"path":"/posts","method":"GET","queryName":"posts"}]
+SERVER_PORT=4000
+```
+
+## 🔍 How It Works
+
+1. **Load Configuration**: Reads from .env file
+2. **Connect**: Establishes connection to data source
+3. **Introspect**: Analyzes schema/structure
+   - MongoDB: Samples documents to infer schema
+   - SQL: Queries information schema
+   - REST: Analyzes response structure
+4. **Generate**: Creates GraphQL schema and resolvers
+5. **Serve**: Starts Apollo Federation-ready server
+
+## 📊 Generated GraphQL Schema
+
+Queries follow the pattern: `{dataSourceName}_{entityName}`
+
+**Example for MongoDB:**
+```graphql
+type Query {
+  mongodb_user(id: ID!): User
+  mongodb_users(limit: Int, offset: Int): [User!]!
+}
+
+type User @key(fields: "_id") {
+  _id: ID!
+  name: String!
+  email: String
+}
+```
+
+## 🛠️ Development
+
+### Setup
+
+```bash
+git clone <repository-url>
+cd apollo-subgraph-generator
+npm install
+```
+
+### Scripts
+
+```bash
+npm run dev      # Development mode with watch
+npm run build    # Build TypeScript
+npm run generate # Generate schema from .env
+npm run serve    # Start server from .env
+npm run test     # Test connections
+```
+
+### Project Structure
+
+```
+src/
+├── cli.ts                    # CLI entry point
+├── index.ts                  # Programmatic API
+├── types/                    # TypeScript types
+├── connectors/               # Data source connectors
+│   ├── mongodb-connector.ts
+│   ├── postgres-connector.ts
+│   ├── mysql-connector.ts
+│   └── rest-connector.ts
+├── generator/                # Schema generation
+│   ├── schema-generator.ts
+│   └── resolver-generator.ts
+├── server/                   # Apollo server
+│   └── apollo-server.ts
+├── core/                     # Core logic
+│   ├── subgraph-generator.ts
+│   └── config-loader.ts
+└── utils/                    # Utilities
+    ├── logger.ts
+    └── type-mapper.ts
+```
+
+## 🔐 Security Best Practices
+
+- **Never commit `.env` files** to version control
+- Store `.env.example` without real credentials
+- Use environment-specific .env files (`.env.development`, `.env.production`)
+- Rotate credentials regularly
+- Use read-only database users when possible
+
+## 🐛 Troubleshooting
+
+### Debug Mode
+
+Enable detailed logging to diagnose issues:
+
+```env
+DEBUG=true
+```
+
+Then run your command:
+```bash
+DEBUG=true npm run serve
+```
+
+### Common Issues
+
+**Only `_id` field discovered:**
+- Enable DEBUG mode to see what's being found
+- Verify your collection has documents with data
+- Check collection name matches exactly (case-sensitive)
+- See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for detailed guide
+
+**Connection errors:**
+- Test connection: `npm run test`
+- Verify credentials in `.env`
+- Check database is running and accessible
+
+**GraphQL errors:**
+- Check `generated/schema.graphql` for the generated schema
+- Enable DEBUG mode for detailed error messages
+- See [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+
+For detailed troubleshooting steps, see **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)**
+
+## 📄 License
+
+MIT
+
+## 🙏 Support
+
+For issues and questions, please open an issue on GitHub.
+
+---
+
+**Built with ❤️ for the GraphQL community**
