@@ -43,6 +43,7 @@ export class ConfigLoader {
           user: process.env.POSTGRES_USER || '',
           password: process.env.POSTGRES_PASSWORD || '',
           schema: process.env.POSTGRES_SCHEMA || 'public',
+          ssl: process.env.POSTGRES_SSL !== 'false',
           ...(process.env.POSTGRES_TABLES && {
             tables: process.env.POSTGRES_TABLES.split(',').map(t => t.trim())
           })

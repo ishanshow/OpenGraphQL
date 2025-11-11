@@ -21,6 +21,7 @@ export class PostgresConnector extends BaseConnector {
         database: this.config.database,
         user: this.config.user,
         password: this.config.password,
+        ssl: this.config.ssl !== false ? { rejectUnauthorized: false } : false,
       });
 
       // Test connection

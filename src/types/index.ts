@@ -21,6 +21,7 @@ export interface PostgresConfig extends BaseDataSourceConfig {
   password: string;
   schema?: string;
   tables?: string[]; // If not provided, will introspect all tables
+  ssl?: boolean; // Enable SSL connection, defaults to true
 }
 
 export interface MySQLConfig extends BaseDataSourceConfig {
