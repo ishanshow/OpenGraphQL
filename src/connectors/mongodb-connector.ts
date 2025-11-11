@@ -148,8 +148,11 @@ export class MongoDBConnector extends BaseConnector {
 
     // Convert to final schema, removing occurrence tracking
     const fields = Array.from(fieldMap.values()).map(({ occurrences, ...field }) => {
-      // If field appears in less than 50% of documents, it's nullable
-      if (occurrences < documents.length * 0.5) {
+      // Fields are nullable by default
+      // Only mark as non-nullable if field appears in ALL documents (100%)
+      if (occurrences === documents.length && !field.isNullable) {
+        field.isNullable = false;
+      } else {
         field.isNullable = true;
       }
       return field;
@@ -165,6 +168,178 @@ export class MongoDBConnector extends BaseConnector {
       },
       nestedTypes: Array.from(nestedTypes.values()),
     };
+  }
+
+  /**
+   * Analyzes a document and creates nested types for objects
+   */
+  private analyzeDocumentWithNesting(
+    doc: any,
+    fieldMap: Map<string, FieldDefinition & { occurrences: number }>,
+    totalDocs: number,
+    parentTypeName: string,
+    currentPath: string,
+    nestedTypes: Map<string, EntitySchema>
+  ): void {
+    if (!doc || typeof doc !== 'object') {
+      return;
+    }
+
+    for (const [key, value] of Object.entries(doc)) {
+      // Skip _id at root level (already handled)
+      if (key === '_id' && !currentPath) {
+        continue;
+      }
+
+      // Skip internal MongoDB fields
+      if (key.startsWith('__') || key.startsWith('$')) {
+        continue;
+      }
+
+      const sanitizedName = TypeMapper.sanitizeFieldName(key);
+
+      if (value === null || value === undefined) {
+        // Mark as nullable if we see null values
+        if (fieldMap.has(sanitizedName)) {
+          const field = fieldMap.get(sanitizedName)!;
+          field.isNullable = true;
+        } else {
+          fieldMap.set(sanitizedName, {
+            name: sanitizedName,
+            type: 'String',
+            isArray: false,
+            isNullable: true,
+            occurrences: 1,
+          });
+        }
+        continue;
+      }
+
+      const isArray = Array.isArray(value);
+      const valueToAnalyze = isArray && value.length > 0 ? value[0] : value;
+
+      // Determine the GraphQL type
+      let type: string;
+      let shouldCreateNestedType = false;
+
+      if (isArray && value.length === 0) {
+        type = 'JSON'; // Unknown array type
+      } else if (
+        typeof valueToAnalyze === 'object' && 
+        !(valueToAnalyze instanceof Date) && 
+        valueToAnalyze.constructor?.name !== 'ObjectId'
+      ) {
+        // This is an object - create a nested type for it
+        const objectKeys = Object.keys(valueToAnalyze);
+        
+        if (objectKeys.length > 0) {
+          // Create a nested type
+          const nestedTypeName = `${parentTypeName}${TypeMapper.toPascalCase(key)}`;
+          type = nestedTypeName;
+          shouldCreateNestedType = true;
+
+          // Create or update the nested type
+          if (!nestedTypes.has(nestedTypeName)) {
+            // Initialize nested type
+            const nestedFieldMap = new Map<string, FieldDefinition & { occurrences: number }>();
+            
+            // Analyze the nested object
+            this.analyzeDocumentWithNesting(
+              valueToAnalyze,
+              nestedFieldMap,
+              totalDocs,
+              nestedTypeName,
+              `${currentPath}${currentPath ? '.' : ''}${key}`,
+              nestedTypes
+            );
+
+            // Convert to EntitySchema
+            // Fields in nested types are nullable by default
+            // Only mark as non-nullable if field appears in ALL occurrences
+            const nestedFields = Array.from(nestedFieldMap.values()).map(({ occurrences, ...field }) => {
+              // For nested types, we need to track how many times the parent appeared
+              // For now, make all nested fields nullable by default
+              field.isNullable = true;
+              return field;
+            });
+
+            nestedTypes.set(nestedTypeName, {
+              name: nestedTypeName,
+              fields: nestedFields,
+              description: `Nested type from ${parentTypeName}.${key}`,
+              isNested: true,
+            });
+          } else {
+            // Update existing nested type by analyzing this instance
+            const existingType = nestedTypes.get(nestedTypeName)!;
+            const nestedFieldMap = new Map<string, FieldDefinition & { occurrences: number }>();
+            
+            // Convert existing fields back to map
+            for (const field of existingType.fields) {
+              nestedFieldMap.set(field.name, { ...field, occurrences: 1 });
+            }
+
+            // Analyze this instance
+            this.analyzeDocumentWithNesting(
+              valueToAnalyze,
+              nestedFieldMap,
+              totalDocs,
+              nestedTypeName,
+              `${currentPath}${currentPath ? '.' : ''}${key}`,
+              nestedTypes
+            );
+
+            // Update the nested type
+            const updatedFields = Array.from(nestedFieldMap.values()).map(({ occurrences, ...field }) => field);
+            nestedTypes.set(nestedTypeName, {
+              ...existingType,
+              fields: updatedFields,
+            });
+          }
+        } else {
+          type = 'JSON'; // Empty object
+        }
+      } else {
+        type = TypeMapper.mapMongoDBType(valueToAnalyze);
+      }
+
+      // Add or update field in the current field map
+      if (!fieldMap.has(sanitizedName)) {
+        fieldMap.set(sanitizedName, {
+          name: sanitizedName,
+          type,
+          isArray,
+          isNullable: true, // Default to nullable, will be set to false later if always present
+          occurrences: 1,
+        });
+      } else {
+        const existingField = fieldMap.get(sanitizedName)!;
+        existingField.occurrences++;
+
+        // Handle type conflicts
+        if (existingField.type !== type) {
+          // If one is a nested type and the other isn't, keep the nested type
+          if (shouldCreateNestedType) {
+            existingField.type = type;
+          } else if (type === 'JSON' || existingField.type === 'JSON') {
+            existingField.type = 'JSON';
+          } else if (type === 'String' || existingField.type === 'String') {
+            existingField.type = 'String';
+          } else if ((type === 'Float' && existingField.type === 'Int') ||
+                     (type === 'Int' && existingField.type === 'Float')) {
+            existingField.type = 'Float';
+          } else {
+            existingField.type = 'JSON';
+          }
+        }
+
+        // Handle array inconsistency
+        if (isArray !== existingField.isArray) {
+          existingField.isArray = true;
+          existingField.isNullable = true;
+        }
+      }
+    }
   }
 
   private analyzeDocument(

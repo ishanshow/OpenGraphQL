@@ -13,14 +13,31 @@ export class SchemaGenerator {
     // Add custom scalars
     typeDefs.push(this.generateScalars());
 
-    // Generate types for each entity
+    // Separate nested types from main entities
+    const nestedTypes: EntitySchema[] = [];
+    const mainEntities: EntitySchema[] = [];
+
     for (const result of introspectionResults) {
       for (const entity of result.entities) {
-        typeDefs.push(this.generateTypeDefinition(entity));
+        if (entity.isNested) {
+          nestedTypes.push(entity);
+        } else {
+          mainEntities.push(entity);
+        }
       }
     }
 
-    // Generate Query type
+    // Generate nested types first (they're referenced by main entities)
+    for (const nestedType of nestedTypes) {
+      typeDefs.push(this.generateNestedTypeDefinition(nestedType));
+    }
+
+    // Generate main entity types
+    for (const entity of mainEntities) {
+      typeDefs.push(this.generateTypeDefinition(entity));
+    }
+
+    // Generate Query type (only for main entities, not nested types)
     typeDefs.push(this.generateQueryType(introspectionResults));
 
     // Join all type definitions
@@ -38,6 +55,30 @@ export class SchemaGenerator {
     }
 
     return scalars.join('\n');
+  }
+
+  /**
+   * Generates a GraphQL type definition for a nested type (no @key directive)
+   */
+  private generateNestedTypeDefinition(entity: EntitySchema): string {
+    const lines: string[] = [];
+
+    // Add description if available
+    if (entity.description) {
+      lines.push(`"""${entity.description}"""`);
+    }
+
+    // Type declaration without @key directive (nested types don't need it)
+    lines.push(`type ${entity.name} {`);
+
+    // Add fields
+    for (const field of entity.fields) {
+      lines.push(this.generateFieldDefinition(field, 2));
+    }
+
+    lines.push('}');
+
+    return lines.join('\n');
   }
 
   /**
@@ -110,6 +151,11 @@ export class SchemaGenerator {
 
     for (const result of introspectionResults) {
       for (const entity of result.entities) {
+        // Skip nested types - they're not queryable directly
+        if (entity.isNested) {
+          continue;
+        }
+
         // Generate list query (e.g., users, products)
         const listQueryName = this.generateListQueryName(entity.name, result.dataSourceName);
         lines.push(
@@ -134,11 +180,13 @@ export class SchemaGenerator {
 
     lines.push('}');
 
-    // Generate input types for filters
+    // Generate input types for filters (only for main entities, not nested types)
     for (const result of introspectionResults) {
       for (const entity of result.entities) {
-        lines.push('');
-        lines.push(this.generateFilterInputType(entity));
+        if (!entity.isNested) {
+          lines.push('');
+          lines.push(this.generateFilterInputType(entity));
+        }
       }
     }
 
@@ -154,9 +202,13 @@ export class SchemaGenerator {
     lines.push(`"""Filter input for ${entity.name}"""`);
     lines.push(`input ${entity.name}Filter {`);
 
-    // Add filterable fields (exclude complex types)
+    // Add filterable fields (exclude complex types and nested object types)
+    const scalarTypes = ['String', 'Int', 'Float', 'Boolean', 'ID'];
+    
     for (const field of entity.fields) {
-      if (field.type !== 'JSON' && !field.isArray) {
+      // Only include scalar types in filters
+      // Exclude: JSON scalars, arrays, and custom nested types
+      if (scalarTypes.includes(field.type) && !field.isArray) {
         lines.push(`  ${field.name}: ${field.type}`);
       }
     }

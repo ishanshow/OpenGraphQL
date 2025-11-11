@@ -6,6 +6,7 @@ A lean, powerful tool that automates Apollo GraphQL subgraph creation from vario
 
 - **Multi-Source Support**: MongoDB, PostgreSQL, MySQL, and REST APIs
 - **Automatic Schema Introspection**: Analyzes data sources and generates GraphQL schemas
+- **🆕 Nested Types Support**: Automatically discovers and creates proper GraphQL types for nested MongoDB objects
 - **Apollo Federation Ready**: Built-in support for Apollo Federation v2
 - **Environment-Based Configuration**: All configuration via .env file
 - **Cross-Platform Compatible**: Works on Windows, macOS, and Linux
