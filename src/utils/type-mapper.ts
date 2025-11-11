@@ -172,6 +172,17 @@ export class TypeMapper {
   }
 
   /**
+   * Converts PascalCase to snake_case
+   * Example: EmbeddedMovie -> embedded_movie
+   */
+  static toSnakeCase(str: string): string {
+    return str
+      .replace(/([A-Z])/g, '_$1')
+      .toLowerCase()
+      .replace(/^_/, ''); // Remove leading underscore
+  }
+
+  /**
    * Converts plural form to singular
    */
   static singularize(word: string): string {
@@ -196,6 +207,44 @@ export class TypeMapper {
       return irregulars[lower];
     }
 
+    // Handle compound words (e.g., "embedded_movies" -> "embedded_movie")
+    // Split by underscore, singularize the last part, then rejoin
+    if (lower.includes('_')) {
+      const parts = lower.split('_');
+      const lastPart = parts[parts.length - 1];
+      const singularizedLast = this.singularizeWord(lastPart);
+      parts[parts.length - 1] = singularizedLast;
+      return parts.join('_');
+    }
+
+    return this.singularizeWord(lower);
+  }
+
+  /**
+   * Singularizes a single word (helper for singularize)
+   */
+  private static singularizeWord(word: string): string {
+    const lower = word.toLowerCase();
+    
+    // Check irregular plurals first
+    const irregulars: Record<string, string> = {
+      'people': 'person',
+      'men': 'man',
+      'women': 'woman',
+      'children': 'child',
+      'teeth': 'tooth',
+      'feet': 'foot',
+      'mice': 'mouse',
+      'geese': 'goose',
+      'movies': 'movie',
+      'series': 'series',
+      'species': 'species',
+    };
+
+    if (irregulars[lower]) {
+      return irregulars[lower];
+    }
+    
     // Words ending in 'ies' - convert to 'y'
     if (lower.endsWith('ies') && lower.length > 4) {
       return lower.slice(0, -3) + 'y';

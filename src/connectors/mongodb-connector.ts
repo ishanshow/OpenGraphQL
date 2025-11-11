@@ -224,6 +224,9 @@ export class MongoDBConnector extends BaseConnector {
 
       if (isArray && value.length === 0) {
         type = 'JSON'; // Unknown array type
+      } else if (this.isBinaryType(valueToAnalyze)) {
+        // Binary/Buffer types should be treated as JSON or String, not expanded
+        type = 'JSON';
       } else if (
         typeof valueToAnalyze === 'object' && 
         !(valueToAnalyze instanceof Date) && 
@@ -232,8 +235,8 @@ export class MongoDBConnector extends BaseConnector {
         // This is an object - create a nested type for it
         const objectKeys = Object.keys(valueToAnalyze);
         
-        if (objectKeys.length > 0) {
-          // Create a nested type
+        if (objectKeys.length > 0 && !this.isBinaryType(valueToAnalyze)) {
+          // Create a nested type (but not for binary buffers)
           const nestedTypeName = `${parentTypeName}${TypeMapper.toPascalCase(key)}`;
           type = nestedTypeName;
           shouldCreateNestedType = true;
@@ -523,8 +526,43 @@ export class MongoDBConnector extends BaseConnector {
   }
 
   private findCollectionName(entityName: string): string {
-    // Convert PascalCase entity name back to collection name (pluralized)
-    // If entityName is "Movie", collection should be "movies"
-    return TypeMapper.pluralize(entityName.toLowerCase());
+    // Convert PascalCase entity name back to collection name (pluralized with snake_case)
+    // Examples:
+    //   "Movie" -> "movie" -> "movies"
+    //   "EmbeddedMovie" -> "embedded_movie" -> "embedded_movies"
+    const snakeCase = TypeMapper.toSnakeCase(entityName);
+    return TypeMapper.pluralize(snakeCase);
+  }
+
+  /**
+   * Detects if a value is a MongoDB Binary type or Buffer
+   */
+  private isBinaryType(value: any): boolean {
+    if (!value || typeof value !== 'object') {
+      return false;
+    }
+
+    // Check for MongoDB Binary type
+    if (value._bsontype === 'Binary' || value.constructor?.name === 'Binary') {
+      return true;
+    }
+
+    // Check for Node.js Buffer
+    if (Buffer.isBuffer(value)) {
+      return true;
+    }
+
+    // Check for objects that look like binary buffers (have numeric indices and length)
+    // This catches cases where Binary.buffer is exposed
+    if (typeof value.length === 'number' && value.length > 100) {
+      const keys = Object.keys(value);
+      const numericKeys = keys.filter(k => /^\d+$/.test(k));
+      // If more than 50% of keys are numeric indices, it's likely a buffer
+      if (numericKeys.length > keys.length * 0.5 && numericKeys.length > 50) {
+        return true;
+      }
+    }
+
+    return false;
   }
 }
