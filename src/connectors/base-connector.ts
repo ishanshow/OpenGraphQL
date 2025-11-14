@@ -38,3 +38,4 @@ export abstract class BaseConnector {
   abstract getById(entityName: string, id: string): Promise<any>;
 }
 
+
