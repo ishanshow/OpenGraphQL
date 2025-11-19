@@ -93,6 +93,9 @@ export class MCPConfigGenerator {
 
     // Generate Claude Desktop config snippet
     await this.generateClaudeConfig(outputDir, endpoint, datasourceName);
+
+    // Generate Cursor IDE config snippet
+    await this.generateCursorConfig(outputDir, endpoint, datasourceName);
   }
 
   /**
@@ -203,6 +206,42 @@ ALLOW_MUTATIONS=false
     Logger.success(`Claude Desktop config snippet generated: ${configPath}`);
     Logger.info('\nTo use with Claude Desktop, add this to your claude_desktop_config.json:');
     Logger.info(JSON.stringify(claudeConfig, null, 2));
+  }
+
+  /**
+   * Generate Cursor IDE configuration snippet
+   */
+  private static async generateCursorConfig(
+    outputDir: string,
+    endpoint: string,
+    datasourceName: string
+  ): Promise<void> {
+    const serverName = `graphql-${datasourceName}`;
+
+    const cursorConfig: ClaudeDesktopConfig = {
+      mcpServers: {
+        [serverName]: {
+          command: 'npx',
+          type: 'stdio',
+          args: ['-y', 'mcp-graphql'],
+          env: {
+            ENDPOINT: endpoint,
+            ALLOW_MUTATIONS: 'false'
+          }
+        }
+      }
+    };
+
+    const configPath = path.join(outputDir, 'cursor-mcp-config.json');
+    await fs.writeFile(
+      configPath,
+      JSON.stringify(cursorConfig, null, 2),
+      'utf8'
+    );
+
+    Logger.success(`Cursor IDE config snippet generated: ${configPath}`);
+    Logger.info('\nTo use with Cursor, add this to ~/.cursor/mcp.json or ~/.cursor/mcp_settings.json:');
+    Logger.info(JSON.stringify(cursorConfig, null, 2));
   }
 
   /**
