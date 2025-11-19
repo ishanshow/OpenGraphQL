@@ -6,7 +6,8 @@ A lean, powerful tool that automates Apollo GraphQL subgraph creation from vario
 
 - **Multi-Source Support**: MongoDB, PostgreSQL, MySQL, and REST APIs
 - **Automatic Schema Introspection**: Analyzes data sources and generates GraphQL schemas
-- **🆕 Nested Types Support**: Automatically discovers and creates proper GraphQL types for nested MongoDB objects
+- **🆕 Smart Scan for MongoDB**: Intelligent dynamic sampling that discovers all fields, even in collections with varying schemas
+- **Nested Types Support**: Automatically discovers and creates proper GraphQL types for nested MongoDB objects
 - **Apollo Federation Ready**: Built-in support for Apollo Federation v2
 - **Environment-Based Configuration**: All configuration via .env file
 - **Cross-Platform Compatible**: Works on Windows, macOS, and Linux
@@ -146,6 +147,126 @@ OUTPUT_DIR=./generated
 # Optional: Apollo Federation
 APOLLO_GRAPH_REF=my-graph@current
 APOLLO_KEY=service:my-graph:your-api-key
+```
+
+## 🔬 Smart Scan Feature (MongoDB)
+
+### Overview
+
+Smart Scan is an intelligent sampling algorithm for MongoDB collections that dynamically discovers all fields, even those that appear sporadically. This is crucial for collections with varying schemas where different documents may have different field sets.
+
+### How It Works
+
+The algorithm uses an adaptive approach:
+
+1. **Initial Sampling**: Starts with 50 random documents
+2. **Iterative Sampling**: Continues sampling in batches of 100 documents
+3. **Field Tracking**: Monitors unique field paths discovered in each iteration
+4. **Automatic Termination**: Stops when no new fields found in 2 consecutive iterations
+5. **Safety Limits**: 
+   - Maximum 5000 documents
+   - Early exit if 80% of collection sampled
+
+**Algorithm Flow:**
+```
+Count documents → Sample batch → Extract field paths → New fields found?
+                       ↑                                      ↓
+                       ← Yes: Continue sampling ──────────── No: Increment counter
+                       ← Stop if counter reaches 2 ─────────┘
+```
+
+### Configuration
+
+Enable via environment variable:
+
+```env
+SMART_SCAN=true
+```
+
+### When to Use
+
+**Use Smart Scan when:**
+- Collections have varying schemas across documents
+- Fields appear sporadically (e.g., only in 1-5% of documents)
+- Schema completeness is more important than introspection speed
+- Working with heterogeneous document structures
+
+**Use Fixed Sampling (default) when:**
+- Collections have consistent schemas
+- Speed is prioritized over completeness
+- Working with very large collections (millions of documents)
+- Most fields appear in the first 500 documents
+
+### Performance Comparison
+
+| Mode | Speed | Completeness | Documents Sampled | Best For |
+|------|-------|--------------|-------------------|----------|
+| **Fixed Sampling** | Fast | Good | Exactly 500 | Consistent schemas |
+| **Smart Scan** | Variable | Excellent | 50-5000 | Varying schemas |
+
+### Example Output
+
+**With Smart Scan enabled:**
+```
+ℹ Smart scan enabled for users...
+ℹ Collection users has 10000 total documents
+ℹ Starting dynamic sampling for users...
+🐛 Iteration 1: sampled 50 docs, found 15 new fields (total: 15 unique fields)
+🐛 Iteration 2: sampled 100 docs, found 8 new fields (total: 23 unique fields)
+🐛 Iteration 3: sampled 100 docs, found 2 new fields (total: 25 unique fields)
+🐛 Iteration 4: sampled 100 docs, found 0 new fields (total: 25 unique fields)
+🐛 No new fields found. Stability counter: 1/2
+🐛 Iteration 5: sampled 100 docs, found 0 new fields (total: 25 unique fields)
+ℹ Schema stabilized after 5 iterations
+✓ Smart scan completed: sampled 450 documents, found 25 unique fields
+```
+
+### Technical Details
+
+**Random Sampling Strategy:**
+- Uses MongoDB's `$sample` aggregation stage for true random sampling
+- Efficient even on large collections (no full collection scan)
+- Works with sharded collections
+- Provides diverse document coverage
+
+**Field Path Tracking:**
+- Tracks nested fields with dot notation (`user.address.city`)
+- Handles arrays with `[]` notation (`tags[]`)
+- Ignores MongoDB internal fields (`__`, `$`)
+- Uses `Set<string>` for O(1) lookup performance
+
+**Safety Features:**
+- Built-in maximum of 5000 documents
+- Early exit conditions prevent excessive resource usage
+- Random sampling distributes database load
+- Compatible with read-only database users
+
+### Testing Smart Scan
+
+Create a test collection with varying schemas:
+
+```javascript
+// MongoDB shell
+db.test.insertOne({ _id: 1, name: "Alice", fieldA: "common" })
+db.test.insertOne({ _id: 2, name: "Bob", fieldA: "common" })
+db.test.insertOne({ _id: 3, name: "Charlie", fieldB: "rare" })
+
+// Add many documents without optional fields
+for (let i = 4; i <= 1000; i++) {
+  db.test.insertOne({ _id: i, name: `User${i}` })
+}
+```
+
+**Test fixed sampling (may miss `fieldB`):**
+```bash
+SMART_SCAN=false npm run generate
+cat generated/schema.graphql
+```
+
+**Test smart scan (should find `fieldB`):**
+```bash
+SMART_SCAN=true npm run generate
+cat generated/schema.graphql
 ```
 
 ## 🎯 Usage
