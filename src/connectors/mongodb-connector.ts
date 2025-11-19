@@ -83,13 +83,176 @@ export class MongoDBConnector extends BaseConnector {
     return allEntities;
   }
 
+  /**
+   * Dynamic sampling algorithm that continues sampling until no new fields are discovered
+   * Uses random sampling with replacement to ensure diverse document coverage
+   */
+  private async dynamicSampling(
+    collection: Collection,
+    collectionName: string
+  ): Promise<{
+    documents: any[];
+    totalSampled: number;
+    uniqueFieldCount: number;
+  }> {
+    const INITIAL_BATCH_SIZE = 50;
+    const SUBSEQUENT_BATCH_SIZE = 100;
+    const MAX_SAMPLES = 5000; // Safety limit to prevent excessive scanning
+    const STABLE_ITERATIONS = 2; // Number of iterations with no new fields before stopping
+    
+    // Get total document count for random sampling
+    const totalDocCount = await collection.countDocuments();
+    Logger.info(`Collection ${collectionName} has ${totalDocCount} total documents`);
+    
+    if (totalDocCount === 0) {
+      return { documents: [], totalSampled: 0, uniqueFieldCount: 0 };
+    }
+    
+    const allDocuments: any[] = [];
+    const seenFieldPaths = new Set<string>();
+    let totalSampled = 0;
+    let iterationsWithoutNewFields = 0;
+    let iteration = 0;
+    
+    Logger.info(`Starting dynamic sampling for ${collectionName}...`);
+    
+    while (totalSampled < MAX_SAMPLES && iterationsWithoutNewFields < STABLE_ITERATIONS) {
+      iteration++;
+      const batchSize = iteration === 1 ? INITIAL_BATCH_SIZE : SUBSEQUENT_BATCH_SIZE;
+      const remainingSamples = Math.min(batchSize, MAX_SAMPLES - totalSampled);
+      
+      if (remainingSamples <= 0) {
+        break;
+      }
+      
+      // Perform random sampling using aggregation pipeline
+      const batch = await collection.aggregate([
+        { $sample: { size: Math.min(remainingSamples, totalDocCount) } }
+      ]).toArray();
+      
+      if (batch.length === 0) {
+        break;
+      }
+      
+      // Track fields before processing this batch
+      const fieldCountBefore = seenFieldPaths.size;
+      
+      // Extract all field paths from the batch
+      for (const doc of batch) {
+        this.extractFieldPaths(doc, '', seenFieldPaths);
+      }
+      
+      const newFieldsFound = seenFieldPaths.size - fieldCountBefore;
+      allDocuments.push(...batch);
+      totalSampled += batch.length;
+      
+      Logger.debug(
+        `Iteration ${iteration}: sampled ${batch.length} docs, ` +
+        `found ${newFieldsFound} new fields (total: ${seenFieldPaths.size} unique fields)`
+      );
+      
+      if (newFieldsFound === 0) {
+        iterationsWithoutNewFields++;
+        Logger.debug(`No new fields found. Stability counter: ${iterationsWithoutNewFields}/${STABLE_ITERATIONS}`);
+      } else {
+        iterationsWithoutNewFields = 0; // Reset counter when new fields are found
+      }
+      
+      // Early exit if we've sampled a significant portion of the collection
+      if (totalSampled >= totalDocCount * 0.8) {
+        Logger.info(`Sampled 80% of collection, stopping early`);
+        break;
+      }
+    }
+    
+    if (totalSampled >= MAX_SAMPLES) {
+      Logger.warning(`Reached maximum sample limit of ${MAX_SAMPLES} documents`);
+    } else if (iterationsWithoutNewFields >= STABLE_ITERATIONS) {
+      Logger.info(`Schema stabilized after ${iteration} iterations`);
+    }
+    
+    return {
+      documents: allDocuments,
+      totalSampled,
+      uniqueFieldCount: seenFieldPaths.size,
+    };
+  }
+  
+  /**
+   * Recursively extracts all field paths from a document
+   * Tracks nested field paths using dot notation
+   */
+  private extractFieldPaths(
+    obj: any,
+    prefix: string,
+    fieldPaths: Set<string>
+  ): void {
+    if (obj === null || obj === undefined) {
+      return;
+    }
+    
+    if (typeof obj !== 'object') {
+      return;
+    }
+    
+    // Handle arrays
+    if (Array.isArray(obj)) {
+      if (obj.length > 0) {
+        // Sample the first element to detect array item type
+        const fieldPath = prefix || 'array';
+        fieldPaths.add(`${fieldPath}[]`);
+        this.extractFieldPaths(obj[0], `${fieldPath}[]`, fieldPaths);
+      }
+      return;
+    }
+    
+    // Handle objects
+    for (const [key, value] of Object.entries(obj)) {
+      // Skip internal MongoDB fields
+      if (key.startsWith('__') || key.startsWith('$')) {
+        continue;
+      }
+      
+      // Skip binary types
+      if (this.isBinaryType(value)) {
+        const fieldPath = prefix ? `${prefix}.${key}` : key;
+        fieldPaths.add(fieldPath);
+        continue;
+      }
+      
+      const fieldPath = prefix ? `${prefix}.${key}` : key;
+      fieldPaths.add(fieldPath);
+      
+      // Recursively process nested objects and arrays
+      if (value !== null && typeof value === 'object') {
+        this.extractFieldPaths(value, fieldPath, fieldPaths);
+      }
+    }
+  }
+
   private async introspectCollection(
     collection: Collection,
     collectionName: string
   ): Promise<{ mainEntity: EntitySchema; nestedTypes: EntitySchema[] }> {
-    // Sample MORE documents to get better schema coverage
-    const sampleSize = 500;
-    const documents = await collection.find().limit(sampleSize).toArray();
+    // Check if smart_scan is enabled
+    const smartScan = process.env.SMART_SCAN === 'true';
+    
+    let documents: any[];
+    let totalSampled: number;
+    
+    if (smartScan) {
+      Logger.info(`Smart scan enabled for ${collectionName}...`);
+      const samplingResult = await this.dynamicSampling(collection, collectionName);
+      documents = samplingResult.documents;
+      totalSampled = samplingResult.totalSampled;
+      Logger.info(`Smart scan completed: sampled ${totalSampled} documents, found ${samplingResult.uniqueFieldCount} unique fields`);
+    } else {
+      // Default fixed sampling
+      const sampleSize = 500;
+      documents = await collection.find().limit(sampleSize).toArray();
+      totalSampled = documents.length;
+      Logger.info(`Fixed sampling: analyzing ${documents.length} documents from ${collectionName}...`);
+    }
 
     if (documents.length === 0) {
       Logger.warning(`Collection ${collectionName} is empty, creating minimal schema`);
@@ -160,11 +323,13 @@ export class MongoDBConnector extends BaseConnector {
 
     Logger.info(`Final schema has ${fields.length} fields, ${nestedTypes.size} nested types`);
 
+    const scanMethod = smartScan ? 'smart scan' : 'fixed sampling';
+    
     return {
       mainEntity: {
         name: typeName,
         fields,
-        description: `Collection: ${collectionName} (sampled ${documents.length} documents, ${fields.length} unique fields)`,
+        description: `Collection: ${collectionName} (${scanMethod}: ${totalSampled} documents, ${fields.length} unique fields)`,
       },
       nestedTypes: Array.from(nestedTypes.values()),
     };
