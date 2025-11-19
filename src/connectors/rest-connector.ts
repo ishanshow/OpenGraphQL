@@ -184,33 +184,91 @@ export class RESTConnector extends BaseConnector {
     }
 
     try {
+      // Merge filter into query parameters
+      const queryParams = {
+        ...(args?.params || {}),
+        ...(args?.filter || {}),
+      };
+
       const response = await this.client.request({
         method: endpoint.method,
         url: endpoint.path,
-        params: args?.params,
+        params: queryParams,
         data: args?.body,
       });
 
       // Normalize response to array
+      let dataArray: any[] = [];
       if (Array.isArray(response.data)) {
-        return response.data;
+        dataArray = response.data;
       } else if (response.data && typeof response.data === 'object') {
         // Check common patterns for nested arrays
         const dataKeys = Object.keys(response.data);
         for (const key of ['data', 'results', 'items', entityName.toLowerCase()]) {
           if (dataKeys.includes(key) && Array.isArray(response.data[key])) {
-            return response.data[key];
+            dataArray = response.data[key];
+            break;
           }
         }
-        // Return as single item array
-        return [response.data];
+        // If no nested array found, return as single item array
+        if (dataArray.length === 0) {
+          dataArray = [response.data];
+        }
       }
 
-      return [];
+      // Apply client-side filtering if filter is provided
+      // This ensures filtering works even if the REST API doesn't support it
+      if (args?.filter && Object.keys(args.filter).length > 0) {
+        dataArray = this.applyClientSideFilter(dataArray, args.filter);
+      }
+
+      // Apply limit and offset if provided
+      const offset = args?.offset || 0;
+      const limit = args?.limit;
+      
+      if (offset > 0 || limit !== undefined) {
+        dataArray = dataArray.slice(offset, limit ? offset + limit : undefined);
+      }
+
+      return dataArray;
     } catch (error) {
       Logger.error(`Failed to fetch data for ${entityName}`, error);
       return [];
     }
+  }
+
+  /**
+   * Applies client-side filtering to the data array
+   * This is a fallback for REST APIs that don't support filtering via query parameters
+   */
+  private applyClientSideFilter(data: any[], filter: Record<string, any>): any[] {
+    return data.filter(item => {
+      for (const [key, value] of Object.entries(filter)) {
+        // Handle nested keys (e.g., "user.name")
+        const itemValue = this.getNestedValue(item, key);
+        
+        // Null/undefined check
+        if (value === null || value === undefined) {
+          if (itemValue !== value) return false;
+        }
+        // String comparison (case-insensitive)
+        else if (typeof value === 'string' && typeof itemValue === 'string') {
+          if (itemValue.toLowerCase() !== value.toLowerCase()) return false;
+        }
+        // Exact match for other types
+        else if (itemValue !== value) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }
+
+  /**
+   * Gets a nested value from an object using dot notation
+   */
+  private getNestedValue(obj: any, path: string): any {
+    return path.split('.').reduce((current, key) => current?.[key], obj);
   }
 
   async getById(entityName: string, id: string): Promise<any> {
