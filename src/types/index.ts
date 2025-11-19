@@ -66,6 +66,7 @@ export interface EntitySchema {
   fields: FieldDefinition[];
   description?: string;
   isNested?: boolean; // True if this is a nested type (not a top-level entity)
+  sourceName?: string; // Original collection/table name from the data source
 }
 
 export interface IntrospectionResult {
