@@ -2,6 +2,7 @@ import { GeneratorConfig, IntrospectionResult, DataSourceConfig } from '../types
 import { ConnectorFactory, BaseConnector } from '../connectors';
 import { ApolloSubgraphServer } from '../server';
 import { Logger } from '../utils/logger';
+import { MCPConfigGenerator, MCPServerManager } from '../mcp';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
@@ -9,6 +10,7 @@ export class SubgraphGenerator {
   private connectors: Map<string, BaseConnector> = new Map();
   private introspectionResults: IntrospectionResult[] = [];
   private server: ApolloSubgraphServer;
+  private mcpServer?: MCPServerManager;
 
   constructor() {
     this.server = new ApolloSubgraphServer();
@@ -70,7 +72,7 @@ export class SubgraphGenerator {
   /**
    * Generates and saves schema files
    */
-  async generateSchemaFiles(outputDir: string = './generated'): Promise<void> {
+  async generateSchemaFiles(outputDir: string = './generated', serverPort: number = 4000): Promise<void> {
     Logger.section('Generating Schema Files');
 
     // Create output directory
@@ -107,12 +109,44 @@ export class SubgraphGenerator {
       'utf-8'
     );
     Logger.success(`Data source info saved to ${configPath}`);
+
+    // Generate MCP configuration
+    await this.generateMCPConfig(outputDir, serverPort);
+  }
+
+  /**
+   * Generates MCP server configuration
+   */
+  async generateMCPConfig(outputDir: string = './generated', serverPort: number = 4000): Promise<void> {
+    Logger.section('Generating MCP Configuration');
+
+    try {
+      // Get primary data source name for MCP server naming
+      const primaryDataSource = this.introspectionResults[0]?.dataSourceName || 'graphql';
+
+      // Generate MCP config files
+      await MCPConfigGenerator.generateConfig(outputDir, serverPort, primaryDataSource);
+
+      // Generate startup script
+      await MCPConfigGenerator.generateStartupScript(outputDir, serverPort);
+
+      Logger.success('MCP configuration generated successfully');
+      Logger.info('\n💡 Next steps:');
+      Logger.info('   1. Start your GraphQL server: npm run serve');
+      Logger.info('   2. In another terminal, start MCP server: ./generated/start-mcp-server.sh');
+      Logger.info('   3. Add config to Claude Desktop from: generated/claude-desktop-config.json\n');
+    } catch (error) {
+      Logger.warning('Failed to generate MCP configuration (non-fatal)');
+      if (process.env.DEBUG === 'true') {
+        Logger.error('MCP generation error', error);
+      }
+    }
   }
 
   /**
    * Starts the Apollo server
    */
-  async startServer(port: number): Promise<string> {
+  async startServer(port: number, options?: { startMCP?: boolean; outputDir?: string }): Promise<string> {
     Logger.section('Starting Apollo Server');
 
     // Create the server
@@ -123,7 +157,48 @@ export class SubgraphGenerator {
     );
 
     // Start the server
-    return await this.server.start(port);
+    const url = await this.server.start(port);
+
+    // Optionally start MCP server
+    if (options?.startMCP && options?.outputDir) {
+      await this.startMCPServer(options.outputDir);
+    }
+
+    return url;
+  }
+
+  /**
+   * Starts the MCP server
+   */
+  async startMCPServer(outputDir: string = './generated'): Promise<void> {
+    try {
+      const mcpConfigPath = path.join(outputDir, 'mcp-config.yaml');
+
+      // Check if config exists
+      try {
+        await fs.access(mcpConfigPath);
+      } catch {
+        Logger.warning('MCP config not found. Run generate command first or disable MCP.');
+        return;
+      }
+
+      // Get endpoint from first datasource
+      const port = 4000; // This should ideally be passed from the server
+      const endpoint = `http://localhost:${port}/`;
+
+      this.mcpServer = new MCPServerManager({
+        configPath: mcpConfigPath,
+        endpoint,
+        port: 8000
+      });
+
+      await this.mcpServer.start();
+    } catch (error) {
+      Logger.warning('Failed to start MCP server (non-fatal)');
+      if (process.env.DEBUG === 'true') {
+        Logger.error('MCP server error', error);
+      }
+    }
   }
 
   /**
@@ -131,6 +206,11 @@ export class SubgraphGenerator {
    */
   async shutdown(): Promise<void> {
     Logger.section('Shutting Down');
+
+    // Stop MCP server if running
+    if (this.mcpServer && this.mcpServer.isRunning()) {
+      await this.mcpServer.stop();
+    }
 
     // Stop server
     await this.server.stop();

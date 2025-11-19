@@ -12,7 +12,7 @@ export class TypeMapper {
     }
 
     const type = typeof value;
-    
+
     if (Array.isArray(value)) {
       if (value.length === 0) {
         return 'JSON'; // Unknown array type, use JSON scalar
@@ -30,13 +30,23 @@ export class TypeMapper {
           return 'ID';
         }
         return 'String';
-      
+
       case 'number':
-        return Number.isInteger(value) ? 'Int' : 'Float';
-      
+        // GraphQL Int can only represent 32-bit signed integers (-2^31 to 2^31-1)
+        // If the number is outside this range, use Float instead
+        if (Number.isInteger(value)) {
+          const MAX_INT_32 = 2147483647;
+          const MIN_INT_32 = -2147483648;
+          if (value > MAX_INT_32 || value < MIN_INT_32) {
+            return 'Float'; // Use Float for large integers (e.g., timestamps in milliseconds)
+          }
+          return 'Int';
+        }
+        return 'Float';
+
       case 'boolean':
         return 'Boolean';
-      
+
       case 'object':
         if (value instanceof Date) {
           return 'String'; // Could use DateTime scalar
@@ -46,7 +56,7 @@ export class TypeMapper {
         }
         // Nested object - return JSON scalar
         return 'JSON';
-      
+
       default:
         return 'JSON';
     }

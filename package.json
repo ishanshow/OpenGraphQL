@@ -12,7 +12,9 @@
     "start": "node dist/cli.js",
     "generate": "tsx src/cli.ts generate",
     "serve": "tsx src/cli.ts serve",
-    "test": "tsx src/cli.ts test"
+    "serve:mcp": "tsx src/cli.ts serve --with-mcp",
+    "test": "tsx src/cli.ts test",
+    "mcp:start": "bash generated/start-mcp-server.sh"
   },
   "keywords": [
     "apollo",

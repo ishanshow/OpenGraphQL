@@ -8,6 +8,7 @@ export class MongoDBConnector extends BaseConnector {
   private client: MongoClient | null = null;
   private db: Db | null = null;
   protected config: MongoDBConfig;
+  private entityToCollectionMap: Map<string, string> = new Map(); // Maps entity name to collection name
 
   constructor(config: MongoDBConfig) {
     super(config);
@@ -63,13 +64,16 @@ export class MongoDBConnector extends BaseConnector {
       try {
         const collection = this.db.collection(collectionName);
         const result = await this.introspectCollection(collection, collectionName);
-        
+
+        // Store the mapping from entity name to collection name
+        this.entityToCollectionMap.set(result.mainEntity.name, collectionName);
+
         // Add main entity
         allEntities.push(result.mainEntity);
-        
+
         // Add nested types
         allEntities.push(...result.nestedTypes);
-        
+
         const totalFields = result.mainEntity.fields.length;
         const nestedCount = result.nestedTypes.length;
         Logger.success(
@@ -329,7 +333,8 @@ export class MongoDBConnector extends BaseConnector {
       mainEntity: {
         name: typeName,
         fields,
-        description: `Collection: ${collectionName} (${scanMethod}: ${totalSampled} documents, ${fields.length} unique fields)`,
+        description: `Collection: ${collectionName} (sampled ${documents.length} documents, ${fields.length} unique fields)`,
+        sourceName: collectionName, // Store original collection name for lookups
       },
       nestedTypes: Array.from(nestedTypes.values()),
     };
@@ -510,116 +515,18 @@ export class MongoDBConnector extends BaseConnector {
     }
   }
 
-  private analyzeDocument(
-    doc: any,
-    fieldMap: Map<string, FieldDefinition & { occurrences: number }>,
-    prefix: string = '',
-    totalDocs: number
-  ): void {
-    if (!doc || typeof doc !== 'object') {
-      return;
-    }
-
-    for (const [key, value] of Object.entries(doc)) {
-      // Skip _id at root level (already handled)
-      if (key === '_id' && !prefix) {
-        continue;
-      }
-
-      // Skip internal MongoDB fields
-      if (key.startsWith('__') || key.startsWith('$')) {
-        continue;
-      }
-
-      const fieldName = prefix ? `${prefix}_${key}` : key;
-      const sanitizedName = TypeMapper.sanitizeFieldName(fieldName);
-
-      if (value === null || value === undefined) {
-        // Mark as nullable if we see null values
-        if (fieldMap.has(sanitizedName)) {
-          const field = fieldMap.get(sanitizedName)!;
-          field.isNullable = true;
-        } else {
-          fieldMap.set(sanitizedName, {
-            name: sanitizedName,
-            type: 'String',
-            isArray: false,
-            isNullable: true,
-            occurrences: 1,
-          });
-        }
-        continue;
-      }
-
-      const isArray = Array.isArray(value);
-      const valueToAnalyze = isArray && value.length > 0 ? value[0] : value;
-      
-      // Determine the GraphQL type
-      let type: string;
-      let shouldFlatten = false;
-
-      if (isArray && value.length === 0) {
-        type = 'JSON'; // Unknown array type
-      } else if (typeof valueToAnalyze === 'object' && 
-                 !(valueToAnalyze instanceof Date) && 
-                 valueToAnalyze.constructor?.name !== 'ObjectId') {
-        // Check if it's a simple object with few fields (can be flattened)
-        const objectKeys = Object.keys(valueToAnalyze);
-        if (!isArray && objectKeys.length > 0 && objectKeys.length <= 5 && !prefix) {
-          shouldFlatten = true;
-          // Flatten this object into the parent
-          this.analyzeDocument(valueToAnalyze, fieldMap, fieldName, totalDocs);
-          continue;
-        } else {
-          type = 'JSON'; // Complex nested object
-        }
-      } else {
-        type = TypeMapper.mapMongoDBType(valueToAnalyze);
-      }
-
-      if (!fieldMap.has(sanitizedName)) {
-        fieldMap.set(sanitizedName, {
-          name: sanitizedName,
-          type,
-          isArray,
-          isNullable: false,
-          occurrences: 1,
-        });
-      } else {
-        // Field exists, update it
-        const existingField = fieldMap.get(sanitizedName)!;
-        existingField.occurrences++;
-
-        // Handle type conflicts
-        if (existingField.type !== type) {
-          // If types conflict, use the more general type
-          if (type === 'JSON' || existingField.type === 'JSON') {
-            existingField.type = 'JSON';
-          } else if (type === 'String' || existingField.type === 'String') {
-            existingField.type = 'String';
-          } else if ((type === 'Float' && existingField.type === 'Int') ||
-                     (type === 'Int' && existingField.type === 'Float')) {
-            existingField.type = 'Float'; // Use Float for numeric conflicts
-          } else {
-            existingField.type = 'JSON'; // Fallback to JSON for other conflicts
-          }
-        }
-
-        // Handle array inconsistency
-        if (isArray !== existingField.isArray) {
-          existingField.isArray = true;
-          existingField.isNullable = true;
-        }
-      }
-    }
-  }
-
   async getData(entityName: string, args?: any): Promise<any[]> {
     if (!this.db) {
       throw new Error('Database not connected');
     }
 
-    const collectionName = this.findCollectionName(entityName);
+    // Use the mapping to get the actual collection name
+    const collectionName = this.entityToCollectionMap.get(entityName);
+    if (!collectionName) {
+      Logger.error(`No collection mapping found for entity: ${entityName}`);
+      throw new Error(`No collection mapping found for entity: ${entityName}`);
+    }
+
     const collection = this.db.collection(collectionName);
 
     const filter = args?.filter || {};
@@ -640,7 +547,13 @@ export class MongoDBConnector extends BaseConnector {
       throw new Error('Database not connected');
     }
 
-    const collectionName = this.findCollectionName(entityName);
+    // Use the mapping to get the actual collection name
+    const collectionName = this.entityToCollectionMap.get(entityName);
+    if (!collectionName) {
+      Logger.error(`No collection mapping found for entity: ${entityName}`);
+      throw new Error(`No collection mapping found for entity: ${entityName}`);
+    }
+
     const collection = this.db.collection(collectionName);
 
     let objectId: ObjectId;
@@ -688,15 +601,6 @@ export class MongoDBConnector extends BaseConnector {
     }
 
     return converted;
-  }
-
-  private findCollectionName(entityName: string): string {
-    // Convert PascalCase entity name back to collection name (pluralized with snake_case)
-    // Examples:
-    //   "Movie" -> "movie" -> "movies"
-    //   "EmbeddedMovie" -> "embedded_movie" -> "embedded_movies"
-    const snakeCase = TypeMapper.toSnakeCase(entityName);
-    return TypeMapper.pluralize(snakeCase);
   }
 
   /**

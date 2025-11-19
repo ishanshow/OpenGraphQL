@@ -21,6 +21,8 @@ program
   .command('generate')
   .description('Generate GraphQL schema from environment configuration')
   .option('-o, --output <path>', 'Output directory for generated files', process.env.OUTPUT_DIR || './generated')
+  .option('-p, --port <number>', 'GraphQL server port (for MCP config)', process.env.SERVER_PORT || '4000')
+  .option('--no-mcp', 'Skip MCP configuration generation')
   .action(async (options) => {
     try {
       Logger.section('Apollo Subgraph Generator');
@@ -28,11 +30,13 @@ program
       // Load configuration from environment
       Logger.info('Loading configuration from environment variables...');
       const config = ConfigLoader.loadFromEnv();
-      
+
       // Override output directory if specified
       if (options.output) {
         config.outputDir = options.output;
       }
+
+      const port = options.port ? parseInt(options.port) : config.server.port;
 
       // Validate configuration
       ConfigLoader.validate(config);
@@ -47,8 +51,8 @@ program
       // Introspect data sources
       await generator.introspect();
 
-      // Generate schema files
-      await generator.generateSchemaFiles(config.outputDir || './generated');
+      // Generate schema files (includes MCP config if enabled)
+      await generator.generateSchemaFiles(config.outputDir || './generated', port);
 
       // Print summary
       Logger.section('Generation Complete');
@@ -70,6 +74,7 @@ program
   .description('Start the Apollo GraphQL server')
   .option('-p, --port <number>', 'Server port', process.env.SERVER_PORT || '4000')
   .option('--no-generate', 'Skip generating schema files')
+  .option('--with-mcp', 'Start MCP server alongside GraphQL server')
   .action(async (options) => {
     try {
       Logger.section('Apollo Subgraph Server');
@@ -77,7 +82,7 @@ program
       // Load configuration from environment
       Logger.info('Loading configuration from environment variables...');
       const config = ConfigLoader.loadFromEnv();
-      
+
       // Override port if specified
       const port = options.port ? parseInt(options.port) : config.server.port;
 
@@ -99,12 +104,15 @@ program
 
       // Generate schema files (unless disabled)
       if (options.generate !== false) {
-        await generator.generateSchemaFiles(config.outputDir || './generated');
+        await generator.generateSchemaFiles(config.outputDir || './generated', port);
         Logger.info(`💾 Schema files saved to ${config.outputDir || './generated'}\n`);
       }
 
-      // Start server
-      await generator.startServer(port);
+      // Start server (with optional MCP server)
+      await generator.startServer(port, {
+        startMCP: options.withMcp === true,
+        outputDir: config.outputDir || './generated'
+      });
 
       // Handle graceful shutdown
       process.on('SIGINT', async () => {
