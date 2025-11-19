@@ -159,11 +159,23 @@ DATASOURCE_NAME=myapi
 ### What Gets Introspected?
 
 **MongoDB:**
-- Samples up to 500 documents per collection
+- **Default Mode:** Samples up to 500 documents per collection
+- **Smart Scan Mode:** Dynamically samples documents until no new fields are discovered
 - Discovers all field names
 - Infers types from values
 - Handles nested objects (flattens simple ones)
 - Marks fields as nullable if they don't appear in all docs
+
+**MongoDB Smart Scan:**
+Enable smart scanning to catch all fields in collections with varying schemas:
+```env
+SMART_SCAN=true
+```
+- Starts with 50 documents, then samples in batches of 100
+- Uses random sampling for diverse coverage
+- Stops when no new fields are found in 2 consecutive iterations
+- Maximum 5000 documents (safety limit)
+- Ideal for collections where fields appear sporadically
 
 **PostgreSQL/MySQL:**
 - Queries information schema
@@ -326,6 +338,7 @@ DATASOURCE_TYPE=mongodb|postgres|mysql|rest
 MONGODB_URI=mongodb://localhost:27017
 MONGODB_DATABASE=mydb
 MONGODB_COLLECTIONS=users,products  # Optional
+SMART_SCAN=true                     # Optional - enables dynamic sampling
 ```
 
 ### PostgreSQL
@@ -360,14 +373,15 @@ REST_ENDPOINTS=[{"path":"/users","method":"GET","queryName":"users"}]
 REST_HEADERS={"X-Custom":"value"}   # Optional
 ```
 
-### Server
+### Server & General
 
 ```env
 SERVER_PORT=4000
 OUTPUT_DIR=./generated
 APOLLO_GRAPH_REF=my-graph@current   # Optional
 APOLLO_KEY=service:my-graph:key     # Optional
-DEBUG=true                          # Optional
+DEBUG=true                          # Optional - verbose logging
+SMART_SCAN=true                     # Optional - MongoDB dynamic sampling (default: false)
 ```
 
 ---

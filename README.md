@@ -72,7 +72,18 @@ MONGODB_DATABASE=mydb
 
 # Optional: Specific collections to introspect (comma-separated)
 MONGODB_COLLECTIONS=users,products,orders
+
+# Optional: Enable smart scanning for comprehensive field discovery (default: false)
+SMART_SCAN=true
 ```
+
+**Smart Scan Feature:**
+- **Default (SMART_SCAN=false)**: Samples 500 documents per collection
+- **Smart Scan (SMART_SCAN=true)**: Dynamically samples until all fields are discovered
+  - Uses random sampling for diverse coverage
+  - Stops when no new fields found in 2 consecutive iterations
+  - Maximum 5000 documents (safety limit)
+  - Ideal for collections with varying schemas or sparse fields
 
 ### PostgreSQL Configuration
 
@@ -261,6 +272,7 @@ DATASOURCE_TYPE=mongodb
 MONGODB_URI=mongodb://localhost:27017
 MONGODB_DATABASE=ecommerce
 MONGODB_COLLECTIONS=users,products
+SMART_SCAN=true  # Enable smart scanning for complete field discovery
 SERVER_PORT=4000
 ```
 
@@ -294,6 +306,8 @@ SERVER_PORT=4000
 2. **Connect**: Establishes connection to data source
 3. **Introspect**: Analyzes schema/structure
    - MongoDB: Samples documents to infer schema
+     - Fixed sampling: 500 documents (default)
+     - Smart scan: Dynamic sampling until all fields discovered
    - SQL: Queries information schema
    - REST: Analyzes response structure
 4. **Generate**: Creates GraphQL schema and resolvers
