@@ -51,7 +51,7 @@ export class TypeMapper {
         if (value instanceof Date) {
           return 'String'; // Could use DateTime scalar
         }
-        if (value.constructor.name === 'ObjectId' || value._bsontype === 'ObjectId') {
+        if (value.constructor?.name === 'ObjectId' || value._bsontype === 'ObjectId') {
           return 'ID';
         }
         // Nested object - return JSON scalar
