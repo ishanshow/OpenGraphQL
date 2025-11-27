@@ -9,6 +9,7 @@ export class MongoDBConnector extends BaseConnector {
   private db: Db | null = null;
   protected config: MongoDBConfig;
   private entityToCollectionMap: Map<string, string> = new Map(); // Maps entity name to collection name
+  private entitySchemas: Map<string, EntitySchema> = new Map(); // Maps entity name to its schema (for array normalization)
 
   constructor(config: MongoDBConfig) {
     super(config);
@@ -67,6 +68,12 @@ export class MongoDBConnector extends BaseConnector {
 
         // Store the mapping from entity name to collection name
         this.entityToCollectionMap.set(result.mainEntity.name, collectionName);
+
+        // Store entity schema for data normalization during queries
+        this.entitySchemas.set(result.mainEntity.name, result.mainEntity);
+        for (const nestedType of result.nestedTypes) {
+          this.entitySchemas.set(nestedType.name, nestedType);
+        }
 
         // Add main entity
         allEntities.push(result.mainEntity);
@@ -310,6 +317,12 @@ export class MongoDBConnector extends BaseConnector {
       this.analyzeDocumentWithNesting(doc, fieldMap, documents.length, typeName, '', nestedTypes);
     }
 
+    // **Sparse field sampling**: Look for array fields that might be mostly empty
+    // This catches ultra-sparse fields like "images" that appear in <1% of documents
+    if (smartScan) {
+      await this.sampleSparseArrayFields(collection, fieldMap, typeName, nestedTypes, documents.length);
+    }
+
     Logger.debug(`Field map after analysis has ${fieldMap.size} fields`);
     Logger.debug(`Discovered ${nestedTypes.size} nested types`);
 
@@ -338,6 +351,86 @@ export class MongoDBConnector extends BaseConnector {
       },
       nestedTypes: Array.from(nestedTypes.values()),
     };
+  }
+
+  /**
+   * Samples documents with populated array fields to discover nested types for sparse fields
+   * This catches fields like "images" that appear in <1% of documents
+   */
+  private async sampleSparseArrayFields(
+    collection: Collection,
+    fieldMap: Map<string, FieldDefinition & { occurrences: number }>,
+    typeName: string,
+    nestedTypes: Map<string, EntitySchema>,
+    totalDocs: number
+  ): Promise<void> {
+    // Find array fields that are currently typed as JSON
+    const sparseArrayFields: string[] = [];
+    for (const [fieldName, field] of fieldMap.entries()) {
+      if (field.isArray && field.type === 'JSON' && fieldName !== '_id') {
+        sparseArrayFields.push(fieldName);
+      }
+    }
+
+    if (sparseArrayFields.length === 0) {
+      return;
+    }
+
+    Logger.debug(`Found ${sparseArrayFields.length} potential sparse array fields: ${sparseArrayFields.join(', ')}`);
+
+    // For each sparse field, try to find documents where it's populated
+    for (const fieldName of sparseArrayFields) {
+      try {
+        // Query for documents where this field exists and is a non-empty array
+        const sample = await collection.findOne({
+          [fieldName]: { $exists: true, $ne: [], $type: 'array' }
+        });
+
+        if (sample && sample[fieldName] && Array.isArray(sample[fieldName]) && sample[fieldName].length > 0) {
+          const firstElement = sample[fieldName][0];
+
+          // Check if it's an object (potential nested type)
+          if (firstElement && typeof firstElement === 'object' && !Array.isArray(firstElement) &&
+              !(firstElement instanceof Date) && firstElement.constructor?.name !== 'ObjectId') {
+
+            const nestedTypeName = `${typeName}${TypeMapper.toPascalCase(fieldName)}`;
+            Logger.info(`✨ Discovered sparse field "${fieldName}" with nested type ${nestedTypeName}`);
+
+            // Create nested type
+            const nestedFieldMap = new Map<string, FieldDefinition & { occurrences: number }>();
+            this.analyzeDocumentWithNesting(
+              firstElement,
+              nestedFieldMap,
+              1,
+              nestedTypeName,
+              fieldName,
+              new Map() // Don't need recursive nesting for this
+            );
+
+            // Add to nested types
+            const nestedFields = Array.from(nestedFieldMap.values()).map(({ occurrences, ...field }) => {
+              field.isNullable = true; // Nested fields are nullable
+              return field;
+            });
+
+            nestedTypes.set(nestedTypeName, {
+              name: nestedTypeName,
+              fields: nestedFields,
+              description: `Nested type from ${typeName}.${fieldName}`,
+              isNested: true,
+            });
+
+            // Update the field to use the nested type instead of JSON
+            const existingField = fieldMap.get(fieldName);
+            if (existingField) {
+              existingField.type = nestedTypeName;
+            }
+          }
+        }
+      } catch (error) {
+        Logger.debug(`Failed to sample sparse field ${fieldName}: ${error}`);
+      }
+    }
   }
 
   /**
@@ -398,8 +491,9 @@ export class MongoDBConnector extends BaseConnector {
         // Binary/Buffer types should be treated as JSON or String, not expanded
         type = 'JSON';
       } else if (
-        typeof valueToAnalyze === 'object' && 
-        !(valueToAnalyze instanceof Date) && 
+        valueToAnalyze !== null &&
+        typeof valueToAnalyze === 'object' &&
+        !(valueToAnalyze instanceof Date) &&
         valueToAnalyze.constructor?.name !== 'ObjectId'
       ) {
         // This is an object - create a nested type for it
@@ -491,17 +585,33 @@ export class MongoDBConnector extends BaseConnector {
 
         // Handle type conflicts
         if (existingField.type !== type) {
-          // If one is a nested type and the other isn't, keep the nested type
+          const primitiveTypes = new Set(['String', 'Int', 'Float', 'Boolean', 'ID', 'JSON']);
+          const existingIsPrimitive = primitiveTypes.has(existingField.type);
+          const newIsPrimitive = primitiveTypes.has(type);
+
+          // Priority: Nested types > Primitives > JSON
+          // Always prefer nested/structured types over JSON
           if (shouldCreateNestedType) {
+            // Upgrade to nested type (e.g., JSON -> KbaseindexImages)
             existingField.type = type;
-          } else if (type === 'JSON' || existingField.type === 'JSON') {
+          } else if (!existingIsPrimitive && newIsPrimitive) {
+            // Keep existing nested type, don't downgrade (e.g., keep KbaseindexImages, ignore JSON)
+            // Do nothing - keep existing type
+          } else if (existingIsPrimitive && !newIsPrimitive) {
+            // Upgrade from primitive to nested type (e.g., JSON -> KbaseindexImages)
+            existingField.type = type;
+          } else if (type === 'JSON' && existingField.type === 'JSON') {
+            // Both JSON, keep JSON
             existingField.type = 'JSON';
           } else if (type === 'String' || existingField.type === 'String') {
+            // String is more general, use it for conflicts between primitives
             existingField.type = 'String';
           } else if ((type === 'Float' && existingField.type === 'Int') ||
                      (type === 'Int' && existingField.type === 'Float')) {
+            // Int/Float conflict -> use Float
             existingField.type = 'Float';
           } else {
+            // Fallback for other conflicts
             existingField.type = 'JSON';
           }
         }
@@ -539,7 +649,7 @@ export class MongoDBConnector extends BaseConnector {
       .skip(skip)
       .toArray();
 
-    return documents.map(doc => this.convertDocument(doc));
+    return documents.map(doc => this.convertDocument(doc, entityName));
   }
 
   async getById(entityName: string, id: string): Promise<any> {
@@ -562,14 +672,14 @@ export class MongoDBConnector extends BaseConnector {
     } catch {
       // If not a valid ObjectId, try as string
       const doc = await collection.findOne({ _id: id } as any);
-      return doc ? this.convertDocument(doc) : null;
+      return doc ? this.convertDocument(doc, entityName) : null;
     }
 
     const doc = await collection.findOne({ _id: objectId });
-    return doc ? this.convertDocument(doc) : null;
+    return doc ? this.convertDocument(doc, entityName) : null;
   }
 
-  private convertDocument(doc: any): any {
+  private convertDocument(doc: any, entityName: string): any {
     if (!doc) return doc;
 
     const converted = { ...doc };
@@ -596,6 +706,20 @@ export class MongoDBConnector extends BaseConnector {
             }
             return item;
           });
+        }
+      }
+    }
+
+    // Normalize array fields based on schema
+    // This handles cases where MongoDB has inconsistent types (e.g., some docs have string, others have array)
+    const entitySchema = this.entitySchemas.get(entityName);
+    if (entitySchema) {
+      for (const field of entitySchema.fields) {
+        if (field.isArray && converted[field.name] !== undefined && converted[field.name] !== null) {
+          // If the field should be an array but isn't, wrap it
+          if (!Array.isArray(converted[field.name])) {
+            converted[field.name] = [converted[field.name]];
+          }
         }
       }
     }

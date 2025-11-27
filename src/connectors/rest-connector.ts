@@ -66,12 +66,13 @@ export class RESTConnector extends BaseConnector {
     }
 
     const entities: EntitySchema[] = [];
+    const nestedTypes: Map<string, EntitySchema> = new Map();
 
     Logger.info(`Introspecting ${this.config.endpoints.length} endpoints...`);
 
     for (const endpoint of this.config.endpoints) {
       try {
-        const entitySchema = await this.introspectEndpoint(endpoint);
+        const entitySchema = await this.introspectEndpoint(endpoint, nestedTypes);
         entities.push(entitySchema);
         Logger.success(`Introspected endpoint: ${endpoint.queryName}`);
       } catch (error) {
@@ -93,10 +94,13 @@ export class RESTConnector extends BaseConnector {
       }
     }
 
+    // Add all discovered nested types to the entities array
+    entities.push(...Array.from(nestedTypes.values()));
+
     return entities;
   }
 
-  private async introspectEndpoint(endpoint: any): Promise<EntitySchema> {
+  private async introspectEndpoint(endpoint: any, nestedTypes: Map<string, EntitySchema>): Promise<EntitySchema> {
     let responseData: any;
 
     // If response schema is provided, use it
@@ -116,16 +120,236 @@ export class RESTConnector extends BaseConnector {
       }
     }
 
-    // Analyze the response structure
-    const fields = this.analyzeResponseStructure(responseData);
+    const entityName = TypeMapper.toPascalCase(endpoint.queryName);
+    
+    // If response is an array, analyze all items additively
+    let samplesToAnalyze: any[] = [];
+    if (Array.isArray(responseData)) {
+      samplesToAnalyze = responseData;
+      Logger.info(`Found ${samplesToAnalyze.length} items to analyze for ${endpoint.queryName}`);
+    } else if (responseData && typeof responseData === 'object') {
+      // Check for nested array patterns
+      for (const key of ['data', 'results', 'items']) {
+        if (responseData[key] && Array.isArray(responseData[key])) {
+          samplesToAnalyze = responseData[key];
+          Logger.info(`Found ${samplesToAnalyze.length} items in '${key}' field for ${endpoint.queryName}`);
+          break;
+        }
+      }
+      // If no array found, treat the response as a single sample
+      if (samplesToAnalyze.length === 0) {
+        samplesToAnalyze = [responseData];
+      }
+    } else {
+      samplesToAnalyze = [responseData];
+    }
+
+    // Analyze all samples additively to discover all possible fields
+    const fieldMap = new Map<string, FieldDefinition>();
+    
+    for (const sample of samplesToAnalyze) {
+      this.analyzeResponseStructureAdditively(
+        sample,
+        entityName,
+        '',
+        nestedTypes,
+        fieldMap
+      );
+    }
+
+    // Convert field map to array
+    const fields = Array.from(fieldMap.values());
+    
+    Logger.success(`Discovered ${fields.length} unique fields for ${endpoint.queryName}`);
 
     return {
-      name: TypeMapper.toPascalCase(endpoint.queryName),
+      name: entityName,
       fields,
       description: `Endpoint: ${endpoint.method} ${endpoint.path}`,
     };
   }
 
+  /**
+   * Analyzes response structure additively with support for nested types
+   * Merges fields from multiple samples to discover all possible fields
+   */
+  private analyzeResponseStructureAdditively(
+    data: any,
+    parentTypeName: string,
+    currentPath: string,
+    nestedTypes: Map<string, EntitySchema>,
+    fieldMap: Map<string, FieldDefinition>
+  ): void {
+    if (data === null || data === undefined) {
+      return;
+    }
+
+    // If it's an array, analyze the first item
+    if (Array.isArray(data)) {
+      if (data.length === 0) {
+        return;
+      }
+      // Analyze all items in the array to discover all possible fields
+      for (const item of data) {
+        this.analyzeResponseStructureAdditively(item, parentTypeName, currentPath, nestedTypes, fieldMap);
+      }
+      return;
+    }
+
+    // If it's not an object, we can't extract fields
+    if (typeof data !== 'object') {
+      return;
+    }
+
+    for (const [key, value] of Object.entries(data)) {
+      const sanitizedName = TypeMapper.sanitizeFieldName(key);
+      const isArray = Array.isArray(value);
+      const valueToAnalyze = isArray && value.length > 0 ? value[0] : value;
+
+      // Skip if we've already seen this field
+      if (fieldMap.has(sanitizedName)) {
+        // Field already exists, but we might need to update the nested type
+        if (typeof valueToAnalyze === 'object' && 
+            valueToAnalyze !== null && 
+            !(valueToAnalyze instanceof Date) &&
+            Object.keys(valueToAnalyze).length > 0) {
+          const nestedTypeName = `${parentTypeName}${TypeMapper.toPascalCase(key)}`;
+          
+          // Update nested type with fields from this sample
+          if (nestedTypes.has(nestedTypeName)) {
+            const existingType = nestedTypes.get(nestedTypeName)!;
+            const existingFieldMap = new Map<string, FieldDefinition>();
+            
+            // Convert existing fields to map
+            for (const field of existingType.fields) {
+              existingFieldMap.set(field.name, field);
+            }
+            
+            // Analyze this instance and merge fields
+            if (isArray && Array.isArray(value)) {
+              for (const arrayItem of value) {
+                if (arrayItem && typeof arrayItem === 'object') {
+                  this.analyzeResponseStructureAdditively(
+                    arrayItem,
+                    nestedTypeName,
+                    `${currentPath}${currentPath ? '.' : ''}${key}`,
+                    nestedTypes,
+                    existingFieldMap
+                  );
+                }
+              }
+            } else {
+              this.analyzeResponseStructureAdditively(
+                valueToAnalyze,
+                nestedTypeName,
+                `${currentPath}${currentPath ? '.' : ''}${key}`,
+                nestedTypes,
+                existingFieldMap
+              );
+            }
+            
+            // Update the nested type with merged fields
+            existingType.fields = Array.from(existingFieldMap.values());
+          }
+        }
+        continue;
+      }
+
+      let type: string;
+      
+      if (valueToAnalyze === null || valueToAnalyze === undefined) {
+        type = 'String';
+      } else if (
+        typeof valueToAnalyze === 'object' &&
+        !(valueToAnalyze instanceof Date)
+      ) {
+        // Check if it's a non-empty object
+        const objectKeys = Object.keys(valueToAnalyze);
+        
+        if (objectKeys.length > 0) {
+          // Create a nested type for this object
+          const nestedTypeName = `${parentTypeName}${TypeMapper.toPascalCase(key)}`;
+          type = nestedTypeName;
+
+          // Create or update the nested type
+          if (!nestedTypes.has(nestedTypeName)) {
+            // Initialize nested field map
+            const nestedFieldMap = new Map<string, FieldDefinition>();
+            
+            // Analyze all items if it's an array
+            if (isArray && Array.isArray(value)) {
+              for (const arrayItem of value) {
+                if (arrayItem && typeof arrayItem === 'object') {
+                  this.analyzeResponseStructureAdditively(
+                    arrayItem,
+                    nestedTypeName,
+                    `${currentPath}${currentPath ? '.' : ''}${key}`,
+                    nestedTypes,
+                    nestedFieldMap
+                  );
+                }
+              }
+            } else {
+              // Recursively analyze the nested object
+              this.analyzeResponseStructureAdditively(
+                valueToAnalyze,
+                nestedTypeName,
+                `${currentPath}${currentPath ? '.' : ''}${key}`,
+                nestedTypes,
+                nestedFieldMap
+              );
+            }
+
+            nestedTypes.set(nestedTypeName, {
+              name: nestedTypeName,
+              fields: Array.from(nestedFieldMap.values()),
+              description: `Nested type from ${parentTypeName}.${key}`,
+              isNested: true,
+            });
+          }
+        } else {
+          // Empty object, use JSON
+          type = 'JSON';
+        }
+      } else {
+        type = TypeMapper.inferTypeFromValue(valueToAnalyze);
+      }
+
+      // Since we're analyzing multiple samples, we should be conservative
+      // and mark all fields as nullable by default. A field might not appear in all samples.
+      // Exception: 'id' fields are commonly required, so we keep those non-nullable
+      const isIdField = sanitizedName.toLowerCase() === 'id' || 
+                        sanitizedName.toLowerCase().endsWith('_id') ||
+                        sanitizedName.toLowerCase().endsWith('id');
+      
+      fieldMap.set(sanitizedName, {
+        name: sanitizedName,
+        type,
+        isArray,
+        isNullable: !isIdField, // All fields nullable except id fields
+      });
+    }
+  }
+
+  /**
+   * Legacy method kept for backwards compatibility
+   * @deprecated Use analyzeResponseStructureAdditively instead
+   */
+  private analyzeResponseStructureWithNesting(
+    data: any,
+    parentTypeName: string,
+    currentPath: string,
+    nestedTypes: Map<string, EntitySchema>
+  ): FieldDefinition[] {
+    const fieldMap = new Map<string, FieldDefinition>();
+    this.analyzeResponseStructureAdditively(data, parentTypeName, currentPath, nestedTypes, fieldMap);
+    return Array.from(fieldMap.values());
+  }
+
+  /**
+   * Legacy method kept for backwards compatibility
+   * @deprecated Use analyzeResponseStructureWithNesting instead
+   */
   private analyzeResponseStructure(data: any, maxDepth: number = 2, currentDepth: number = 0): FieldDefinition[] {
     const fields: FieldDefinition[] = [];
 
