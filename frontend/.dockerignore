@@ -1,27 +1,11 @@
-# Dependencies
 node_modules
-
-# Build output (rebuilt in container)
 dist
-
-# Development files
 *.log
-npm-debug.log*
-
-# IDE
 .idea
 .vscode
-
-# OS
 .DS_Store
 Thumbs.db
-
-# Git
 .git
 .gitignore
-
-# Container files
 Containerfile
 .dockerignore
-
-

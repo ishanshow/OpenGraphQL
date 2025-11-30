@@ -20,12 +20,12 @@
     "frontend:install": "cd frontend && npm install",
     "dev:full": "concurrently \"npm run api\" \"npm run frontend\"",
     "build:frontend": "cd frontend && npm run build",
-    "container:build": "podman-compose build",
-    "container:up": "podman-compose up -d",
-    "container:down": "podman-compose down",
-    "container:logs": "podman-compose logs -f",
-    "container:restart": "podman-compose restart",
-    "container:dev": "podman-compose up --build"
+    "container:build": "podman compose build",
+    "container:up": "podman compose up -d",
+    "container:down": "podman compose down",
+    "container:logs": "podman compose logs -f",
+    "container:restart": "podman compose restart",
+    "container:dev": "podman compose up --build"
   },
   "keywords": [
     "apollo",

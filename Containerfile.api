@@ -1,24 +1,14 @@
 FROM node:20-alpine
-
 WORKDIR /app
-
 RUN apk add --no-cache python3 make g++
-
 COPY package*.json ./
-
-RUN npm ci
-
+RUN npm install
 COPY src/ ./src/
 COPY tsconfig.json ./
-
 RUN npm run build
-
 RUN mkdir -p generated
-
 EXPOSE 3001 4000
-
 ENV NODE_ENV=production
 ENV API_PORT=3001
 ENV SERVER_PORT=4000
-
 CMD ["npx", "tsx", "src/api/index.ts"]
