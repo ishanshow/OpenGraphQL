@@ -1,0 +1,156 @@
+.sql-form.postgres {
+  border-top: 3px solid #336791;
+}
+
+.sql-form.mysql {
+  border-top: 3px solid #00758f;
+}
+
+.sql-type-selector {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.sql-type-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5rem;
+  background: var(--bg-secondary);
+  border: 2px solid var(--border-color);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.sql-type-btn:hover {
+  border-color: var(--text-muted);
+}
+
+.sql-type-btn.active {
+  border-color: var(--accent-primary);
+  background: rgba(0, 245, 212, 0.05);
+}
+
+.sql-icon {
+  font-size: 2.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.sql-type-btn h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 0.25rem;
+}
+
+.sql-type-btn p {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.selected-type-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin-bottom: 1.5rem;
+}
+
+.checkbox-group {
+  margin-top: 1rem;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.checkbox-label input[type="checkbox"] {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.checkbox-label input[type="checkbox"]:checked {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+.checkbox-label input[type="checkbox"]:checked::after {
+  content: '✓';
+  display: block;
+  color: var(--bg-primary);
+  font-size: 12px;
+  text-align: center;
+  line-height: 16px;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.section-header .form-section-title {
+  margin-bottom: 0;
+}
+
+.select-all-btn {
+  padding: 0.5rem 1rem;
+  font-size: 0.8rem;
+}
+
+.generating-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem;
+  text-align: center;
+}
+
+.generating-spinner {
+  width: 48px;
+  height: 48px;
+  border: 3px solid var(--border-color);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 1.5rem;
+}
+
+.generating-spinner.postgres {
+  border-top-color: #336791;
+}
+
+.generating-spinner.mysql {
+  border-top-color: #00758f;
+}
+
+.generating-state h3 {
+  font-size: 1.25rem;
+  color: var(--text-primary);
+  margin-bottom: 0.5rem;
+}
+
+.generating-state p {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+

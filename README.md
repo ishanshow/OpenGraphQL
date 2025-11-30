@@ -1,6 +1,6 @@
-# Apollo Subgraph Generator
+# OpenGraphQL
 
-A lean, powerful tool that automates Apollo GraphQL subgraph creation from various data sources including MongoDB, PostgreSQL, MySQL, and REST APIs.
+A lean, powerful tool that automates Apollo GraphQL subgraph creation from various data sources including MongoDB, PostgreSQL, MySQL, and REST APIs. Features a beautiful web UI for easy configuration.
 
 ## Table of Contents
 
@@ -19,6 +19,7 @@ A lean, powerful tool that automates Apollo GraphQL subgraph creation from vario
 
 ## ✨ Features
 
+- **🖥️ Web UI**: Beautiful, modern frontend for configuring and generating subgraphs
 - **Multi-Source Support**: MongoDB, PostgreSQL, MySQL, and REST APIs
 - **Automatic Schema Introspection**: Analyzes data sources and generates GraphQL schemas
 - **Smart Scan for MongoDB**: Intelligent dynamic sampling that discovers all fields, even in collections with varying schemas
@@ -33,18 +34,57 @@ A lean, powerful tool that automates Apollo GraphQL subgraph creation from vario
 ## 📦 Installation
 
 ```bash
-npm install -g apollo-subgraph-generator
-```
+# Clone the repository
+git clone <repository-url>
+cd OpenGraphQL
 
-Or use locally in your project:
+# Install backend dependencies
+npm install
 
-```bash
-npm install apollo-subgraph-generator
+# Install frontend dependencies
+cd frontend && npm install && cd ..
 ```
 
 ## 🚀 Quick Start
 
-### 1. Create .env File
+### Option 1: Using the Web UI (Recommended)
+
+The easiest way to use OpenGraphQL is through the web interface.
+
+#### Run Locally (Development)
+
+**Terminal 1 - Start the API server:**
+```bash
+npm run api
+```
+
+**Terminal 2 - Start the frontend:**
+```bash
+npm run frontend
+```
+
+Or run both concurrently:
+```bash
+npm run dev:full
+```
+
+Then open http://localhost:3000 in your browser.
+
+#### Run with Containers (Production)
+
+```bash
+# Build and start with Podman
+podman-compose up --build
+
+# Or with Docker
+docker compose up --build
+```
+
+Then open http://localhost:3000 in your browser.
+
+### Option 2: Using the CLI
+
+#### 1. Create .env File
 
 Copy `.env.example` to `.env` and configure your data source:
 
@@ -56,15 +96,176 @@ MONGODB_DATABASE=mydb
 SERVER_PORT=4000
 ```
 
-### 2. Run the Server
+#### 2. Run the Server
 
 ```bash
+npm run serve
 npm run serve
 ```
 
 That's it! Your GraphQL server is running at `http://localhost:4000`
 
 **Open Apollo Sandbox** in your browser to test queries immediately!
+
+## 🖥️ Web UI Guide
+
+The OpenGraphQL web interface provides an intuitive way to:
+
+1. **Connect to your data source** - Enter connection details and test connectivity
+2. **Browse databases/collections** - Select which databases and tables/collections to include
+3. **Generate subgraph** - Automatically create and start your GraphQL server
+4. **Access Apollo Sandbox** - One-click access to explore your new GraphQL API
+
+### Supported Data Sources
+
+| Data Source | Features |
+|-------------|----------|
+| **MongoDB** | URI connection, database selection, collection picker |
+| **PostgreSQL** | Host/port/credentials, SSL support, schema selection, table picker |
+| **MySQL** | Host/port/credentials, database selection, table picker |
+| **REST API** | Base URL, auth token, custom endpoints configuration |
+
+### Web UI Screenshots
+
+The landing page presents three options:
+- **MongoDB** - Connect to MongoDB databases
+- **SQL** - Choose between PostgreSQL or MySQL
+- **REST API** - Wrap existing REST endpoints
+
+## 🐳 Container Support (Podman/Docker)
+
+OpenGraphQL includes full container support for both development and production.
+
+### Quick Start with Containers
+
+```bash
+# Build and start everything
+npm run container:dev
+
+# Or run in background
+npm run container:up
+
+# View logs
+npm run container:logs
+
+# Stop containers
+npm run container:down
+
+# Restart
+npm run container:restart
+```
+
+### Container Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Host Machine                          │
+│                                                          │
+│  ┌──────────────┐     ┌──────────────┐                  │
+│  │   Frontend   │     │     API      │                  │
+│  │   (nginx)    │────▶│   (Node.js)  │                  │
+│  │  Port 3000   │     │  Port 3001   │                  │
+│  └──────────────┘     └──────┬───────┘                  │
+│                              │                           │
+│                              ▼                           │
+│                    ┌──────────────────┐                 │
+│                    │ GraphQL Subgraph │                 │
+│                    │    Port 4000     │                 │
+│                    └──────────────────┘                 │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Ports
+
+| Service | Port | Description |
+|---------|------|-------------|
+| Frontend | 3000 | Web UI (nginx) |
+| API | 3001 | Backend API server |
+| GraphQL | 4000 | Generated subgraph server |
+
+### Container Files
+
+```
+OpenGraphQL/
+├── Containerfile.api      # API server container
+├── compose.yaml           # Podman/Docker compose config
+├── .dockerignore          # Files to exclude from build
+└── frontend/
+    ├── Containerfile      # Frontend container (multi-stage with nginx)
+    ├── nginx.conf         # Nginx config with API proxy
+    └── .dockerignore      # Frontend exclusions
+```
+
+### Manual Container Commands
+
+**Using Podman:**
+```bash
+# Build images
+podman-compose build
+
+# Start services
+podman-compose up -d
+
+# View logs
+podman-compose logs -f
+
+# Stop services
+podman-compose down
+```
+
+**Using Docker:**
+```bash
+# Build images
+docker compose build
+
+# Start services
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop services
+docker compose down
+```
+
+### Volume Mounts
+
+| Path | Description |
+|------|-------------|
+| `./generated` | Persists generated GraphQL schemas |
+| `./.env` | Environment configuration (read-only) |
+
+## 🛠️ NPM Scripts Reference
+
+### Development Scripts
+
+```bash
+npm run api              # Start API server (port 3001)
+npm run frontend         # Start frontend dev server (port 3000)
+npm run dev:full         # Start both API and frontend concurrently
+npm run frontend:install # Install frontend dependencies
+```
+
+### CLI Scripts
+
+```bash
+npm run build            # Build TypeScript
+npm run dev              # Development mode with watch
+npm run generate         # Generate schema from .env
+npm run serve            # Start GraphQL server from .env
+npm run test             # Test data source connections
+```
+
+### Container Scripts
+
+```bash
+npm run container:build   # Build container images
+npm run container:up      # Start containers in background
+npm run container:down    # Stop and remove containers
+npm run container:logs    # Follow container logs
+npm run container:restart # Restart containers
+npm run container:dev     # Build and start (foreground)
+```
 
 ## ⚙️ Configuration
 
@@ -159,6 +360,7 @@ REST_HEADERS={"X-Custom-Header":"value"}
 ```env
 SERVER_PORT=4000
 OUTPUT_DIR=./generated
+API_PORT=3001
 
 # Optional: Apollo Federation
 APOLLO_GRAPH_REF=my-graph@current
@@ -185,22 +387,6 @@ The algorithm uses an adaptive approach:
 5. **Safety Limits**: 
    - Maximum 5000 documents
    - Early exit if 80% of collection sampled
-
-**Algorithm Flow:**
-```
-Count documents → Sample batch → Extract field paths → New fields found?
-                       ↑                                      ↓
-                       ← Yes: Continue sampling ──────────── No: Increment counter
-                       ← Stop if counter reaches 2 ─────────┘
-```
-
-### Configuration
-
-Enable via environment variable:
-
-```env
-SMART_SCAN=true
-```
 
 ### When to Use
 
@@ -701,67 +887,69 @@ input UserFilter {
 }
 ```
 
-## 🛠️ Development
+## 🖥️ Cross-Platform Compatibility
 
-### Setup
+This tool is designed to work consistently across all operating systems:
 
+### Windows
+```powershell
+# PowerShell
+npm run dev:full
+
+# Command Prompt
+npm run dev:full
+```
+
+### macOS/Linux
 ```bash
-git clone <repository-url>
-cd apollo-subgraph-generator
-npm install
+npm run dev:full
 ```
 
-### Scripts
-
-```bash
-npm run dev          # Development mode with hot reload (tsx watch)
-npm run build        # Compile TypeScript to dist/
-npm run generate     # Generate schema files from .env config
-npm run serve        # Start Apollo server with introspected schema
-npm run serve:mcp    # Start Apollo server with MCP server auto-start
-npm run test         # Test data source connections
-npm run mcp:start    # Start MCP server (requires generated config)
-```
-
-### Project Structure
+## 📁 Project Structure
 
 ```
-src/
-├── cli.ts                     # Commander-based CLI, entry point
-├── index.ts                   # Programmatic API exports
-├── types/index.ts             # All TypeScript interfaces/types
-├── core/
-│   ├── config-loader.ts       # Environment variable parsing & validation
-│   └── subgraph-generator.ts  # Orchestrates entire flow (main controller)
-├── connectors/
-│   ├── base-connector.ts      # Abstract base class
-│   ├── connector-factory.ts   # Factory for creating connectors
-│   ├── mongodb-connector.ts   # MongoDB implementation
-│   ├── postgres-connector.ts  # PostgreSQL implementation
-│   ├── mysql-connector.ts     # MySQL implementation
-│   └── rest-connector.ts      # REST API implementation
-├── generator/
-│   ├── schema-generator.ts    # GraphQL SDL generation
-│   └── resolver-generator.ts  # Dynamic resolver creation
-├── server/
-│   └── apollo-server.ts       # Apollo Federation server wrapper
-├── mcp/
-│   ├── mcp-config-generator.ts # Apollo MCP Server config generation
-│   ├── mcp-server-manager.ts   # MCP server lifecycle management
-│   └── index.ts                # MCP module exports
-└── utils/
-    ├── logger.ts              # Chalk-based colored logging
-    └── type-mapper.ts         # DB type → GraphQL type conversions
+OpenGraphQL/
+├── src/
+│   ├── api/                      # API server for frontend
+│   │   └── index.ts
+│   ├── cli.ts                    # CLI entry point
+│   ├── index.ts                  # Programmatic API
+│   ├── types/                    # TypeScript types
+│   ├── connectors/               # Data source connectors
+│   │   ├── mongodb-connector.ts
+│   │   ├── postgres-connector.ts
+│   │   ├── mysql-connector.ts
+│   │   └── rest-connector.ts
+│   ├── generator/                # Schema generation
+│   │   ├── schema-generator.ts
+│   │   └── resolver-generator.ts
+│   ├── server/                   # Apollo server
+│   │   └── apollo-server.ts
+│   ├── core/                     # Core logic
+│   │   ├── subgraph-generator.ts
+│   │   └── config-loader.ts
+│   └── utils/                    # Utilities
+│       ├── logger.ts
+│       └── type-mapper.ts
+├── frontend/                     # React frontend
+│   ├── src/
+│   │   ├── components/           # React components
+│   │   │   ├── LandingPage.tsx
+│   │   │   ├── MongoDBForm.tsx
+│   │   │   ├── SQLForm.tsx
+│   │   │   ├── RESTForm.tsx
+│   │   │   └── SuccessPage.tsx
+│   │   ├── styles/
+│   │   ├── App.tsx
+│   │   └── main.tsx
+│   ├── Containerfile             # Frontend container
+│   ├── nginx.conf                # Nginx configuration
+│   └── package.json
+├── generated/                    # Generated schemas
+├── Containerfile.api             # API container
+├── compose.yaml                  # Container orchestration
+└── package.json
 ```
-
-### Adding New Data Source Types
-
-1. Create new connector in `src/connectors/` extending `BaseConnector`
-2. Add config interface to `src/types/index.ts` (extend `BaseDataSourceConfig`)
-3. Update `DataSourceType` union and `DataSourceConfig` union
-4. Add case to `ConnectorFactory.create()`
-5. Add environment variable parsing in `ConfigLoader.loadFromEnv()`
-6. Update validation in `ConfigLoader.validateDataSource()`
 
 ## 🔐 Security Best Practices
 
@@ -789,83 +977,29 @@ DEBUG=true npm run serve
 
 ### Common Issues
 
-#### Connection Errors
-**Symptom**: "Failed to connect to database"
+**Cannot connect to API:**
+- Ensure API server is running on port 3001
+- Check `npm run api` output for errors
+- Verify no firewall blocking the port
 
-**Solutions**:
+**Frontend not loading:**
+- Ensure frontend is running on port 3000
+- Check `npm run frontend` output for errors
+- Clear browser cache
+
+**Container issues:**
+- Check logs: `npm run container:logs`
+- Ensure ports 3000, 3001, 4000 are available
+- Verify `.env` file exists
+
+**Connection errors:**
 - Test connection: `npm run test`
 - Verify credentials in `.env`
 - Check database is running and accessible
-- Check network/firewall settings
 
-#### Empty Array or No Data Returned
-**Symptom**: Queries return empty arrays `[]`
-
-**Solutions**:
-This was fixed in recent versions through proper collection name mapping.
-- Ensure collection/table names match exactly (case-sensitive)
-- Enable DEBUG mode to see introspection details
-- Check `generated/datasources.json` for `sourceName` field
-
-#### GraphQL Type Errors
-**Symptom**: "Int cannot represent non 32-bit signed integer value"
-
-**Solutions**:
-This is automatically fixed - large numbers (like timestamps) now use Float instead of Int.
-- Update to latest version
-- Regenerate schema: `npm run generate`
-
-#### Only `_id` Field Discovered
-**Symptom**: Schema only contains `_id` field
-
-**Solutions**:
-- Enable DEBUG mode to see what's being found
-- Verify your collection has documents with data
-- Check collection name matches exactly (case-sensitive)
-- Ensure documents aren't empty or null
-
-#### MCP Server Won't Start
-**Symptom**: "mcp-graphql command not found"
-
-**Solution**: The server uses `npx -y mcp-graphql` which automatically downloads and runs the latest version. Ensure you have an internet connection for the first run.
-
-#### Claude Desktop Can't Connect
-**Symptom**: MCP server not appearing in Claude Desktop
-
-**Solutions**:
-1. Ensure GraphQL server is running: `npm run serve`
-2. Restart Claude Desktop after config changes
-3. Check Claude Desktop logs for errors
-4. Verify `generated/claude-desktop-config.json` configuration
-
-### GraphQL Direct Access (No MCP)
-
-You can also skip MCP entirely and use your GraphQL server directly:
-
-#### Browser (Apollo Sandbox)
-```bash
-npm run serve
-# Open http://localhost:4000/ in browser
-```
-
-#### curl
-```bash
-# Introspection query
-curl http://localhost:4000/ \
-  -H "Content-Type: application/json" \
-  -d '{"query": "{ __schema { types { name } } }"}'
-
-# Query data
-curl http://localhost:4000/ \
-  -H "Content-Type: application/json" \
-  -d '{"query": "{ mongodb_users(limit: 5) { _id name email } }"}'
-```
-
-#### GraphQL Clients
-- **Insomnia**: Import `http://localhost:4000/`
-- **Postman**: Add GraphQL collection
-- **GraphiQL**: Standalone app
-- **Altair**: Desktop GraphQL client
+**GraphQL errors:**
+- Check `generated/schema.graphql` for the generated schema
+- Enable DEBUG mode for detailed error messages
 
 ## 📄 License
 

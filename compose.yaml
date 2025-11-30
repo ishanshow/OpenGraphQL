@@ -1,0 +1,35 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Containerfile.api
+    container_name: opengraphql-api
+    ports:
+      - "3001:3001"
+      - "4000:4000"
+    environment:
+      - NODE_ENV=production
+      - API_PORT=3001
+      - SERVER_PORT=4000
+    volumes:
+      - ./generated:/app/generated
+    networks:
+      - opengraphql-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Containerfile
+    container_name: opengraphql-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    networks:
+      - opengraphql-network
+    restart: unless-stopped
+
+networks:
+  opengraphql-network:
+    driver: bridge

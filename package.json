@@ -1,10 +1,10 @@
 {
-  "name": "apollo-subgraph-generator",
+  "name": "opengraphql",
   "version": "1.0.0",
-  "description": "Automated Apollo GraphQL subgraph generator for MongoDB, SQL, and REST API data sources",
+  "description": "OpenGraphQL - Automated Apollo GraphQL subgraph generator for MongoDB, SQL, and REST API data sources",
   "main": "dist/index.js",
   "bin": {
-    "subgraph-gen": "./dist/cli.js"
+    "opengraphql": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
@@ -14,7 +14,18 @@
     "serve": "tsx src/cli.ts serve",
     "serve:mcp": "tsx src/cli.ts serve --with-mcp",
     "test": "tsx src/cli.ts test",
-    "mcp:start": "bash generated/start-mcp-server.sh"
+    "mcp:start": "bash generated/start-mcp-server.sh",
+    "api": "npx tsx src/api/index.ts",
+    "frontend": "cd frontend && npm run dev",
+    "frontend:install": "cd frontend && npm install",
+    "dev:full": "concurrently \"npm run api\" \"npm run frontend\"",
+    "build:frontend": "cd frontend && npm run build",
+    "container:build": "podman-compose build",
+    "container:up": "podman-compose up -d",
+    "container:down": "podman-compose down",
+    "container:logs": "podman-compose logs -f",
+    "container:restart": "podman-compose restart",
+    "container:dev": "podman-compose up --build"
   },
   "keywords": [
     "apollo",
@@ -24,17 +35,20 @@
     "mongodb",
     "sql",
     "rest-api",
-    "code-generation"
+    "code-generation",
+    "opengraphql"
   ],
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@apollo/server": "^4.10.0",
-    "@apollo/subgraph": "^2.7.0",
+    "@apollo/server": "^5.0.0",
+    "@apollo/subgraph": "^2.10.0",
     "axios": "^1.6.5",
     "chalk": "^4.1.2",
     "commander": "^12.0.0",
+    "cors": "^2.8.5",
     "dotenv": "^16.4.1",
+    "express": "^4.18.2",
     "graphql": "^16.8.1",
     "graphql-tag": "^2.12.6",
     "mongodb": "^6.3.0",
@@ -42,8 +56,11 @@
     "pg": "^8.11.3"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
     "@types/node": "^20.11.10",
     "@types/pg": "^8.15.6",
+    "concurrently": "^8.2.2",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"
   }

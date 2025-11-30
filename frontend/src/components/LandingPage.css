@@ -1,0 +1,183 @@
+.landing-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3rem;
+  max-width: 1200px;
+  width: 100%;
+}
+
+.landing-header {
+  text-align: center;
+}
+
+.logo-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.logo-icon {
+  width: 64px;
+  height: 64px;
+}
+
+.logo-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.logo-text {
+  font-size: 3rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.gradient-text {
+  background: var(--gradient-primary);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.landing-subtitle {
+  font-size: 1.25rem;
+  color: var(--text-secondary);
+  font-weight: 400;
+  max-width: 500px;
+}
+
+.cards-container {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+  width: 100%;
+  max-width: 900px;
+}
+
+@media (max-width: 900px) {
+  .cards-container {
+    grid-template-columns: 1fr;
+    max-width: 400px;
+  }
+}
+
+.datasource-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 2rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+  overflow: hidden;
+}
+
+.datasource-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.datasource-card:hover::before {
+  opacity: 1;
+}
+
+.datasource-card.mongodb::before {
+  background: linear-gradient(90deg, #00ED64, #00A547);
+}
+
+.datasource-card.sql::before {
+  background: linear-gradient(90deg, #336791, #00b4d8);
+}
+
+.datasource-card.rest::before {
+  background: linear-gradient(90deg, #f72585, #b5179e);
+}
+
+.datasource-card:hover {
+  border-color: var(--border-glow);
+  box-shadow: var(--shadow-glow);
+}
+
+.datasource-card.mongodb:hover {
+  border-color: rgba(0, 237, 100, 0.3);
+  box-shadow: 0 0 40px rgba(0, 237, 100, 0.15);
+}
+
+.datasource-card.sql:hover {
+  border-color: rgba(51, 103, 145, 0.3);
+  box-shadow: 0 0 40px rgba(51, 103, 145, 0.15);
+}
+
+.datasource-card.rest:hover {
+  border-color: rgba(247, 37, 133, 0.3);
+  box-shadow: 0 0 40px rgba(247, 37, 133, 0.15);
+}
+
+.card-icon {
+  width: 48px;
+  height: 48px;
+  margin-bottom: 1.5rem;
+  color: var(--text-secondary);
+  transition: color 0.3s ease;
+}
+
+.datasource-card.mongodb:hover .card-icon {
+  color: #00ED64;
+}
+
+.datasource-card.sql:hover .card-icon {
+  color: #336791;
+}
+
+.datasource-card.rest:hover .card-icon {
+  color: #f72585;
+}
+
+.card-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  color: var(--text-primary);
+}
+
+.card-description {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  flex-grow: 1;
+}
+
+.card-arrow {
+  position: absolute;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  font-size: 1.5rem;
+  color: var(--text-muted);
+  transition: transform 0.3s ease, color 0.3s ease;
+}
+
+.datasource-card:hover .card-arrow {
+  transform: translateX(4px);
+  color: var(--accent-primary);
+}
+
+.landing-footer {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+
