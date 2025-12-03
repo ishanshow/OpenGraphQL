@@ -55,10 +55,11 @@ export default function SQLForm({ type: initialType, onBack, onSuccess }: SQLFor
     
     try {
       const endpoint = sqlType === 'postgres' ? '/api/postgres/test-connection' : '/api/mysql/test-connection'
+      const systemDatabase = sqlType === 'postgres' ? 'postgres' : 'mysql'
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ host, port, user, password, ssl, database: 'postgres' }),
+        body: JSON.stringify({ host, port, user, password, ssl, database: systemDatabase }),
       })
       
       const data = await response.json()

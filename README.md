@@ -100,7 +100,6 @@ SERVER_PORT=4000
 
 ```bash
 npm run serve
-npm run serve
 ```
 
 That's it! Your GraphQL server is running at `http://localhost:4000`
