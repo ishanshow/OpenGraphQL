@@ -2,6 +2,15 @@
  * Maps database/source types to GraphQL types
  */
 
+import {
+  toPascalCase as namingToPascalCase,
+  toCamelCase as namingToCamelCase,
+  pascalToSnake,
+} from './naming';
+
+// Re-export all naming utilities for convenience
+export * from './naming';
+
 export class TypeMapper {
   /**
    * Maps MongoDB BSON types to GraphQL types
@@ -165,31 +174,27 @@ export class TypeMapper {
 
   /**
    * Converts collection/table names to PascalCase for GraphQL types
+   * @deprecated Use toPascalCase from './naming' directly for new code
    */
   static toPascalCase(str: string): string {
-    return str
-      .split(/[-_\s]/)
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-      .join('');
+    return namingToPascalCase(str);
   }
 
   /**
    * Converts names to camelCase for query names
+   * @deprecated Use toCamelCase from './naming' directly for new code
    */
   static toCamelCase(str: string): string {
-    const pascal = this.toPascalCase(str);
-    return pascal.charAt(0).toLowerCase() + pascal.slice(1);
+    return namingToCamelCase(str);
   }
 
   /**
    * Converts PascalCase to snake_case
    * Example: EmbeddedMovie -> embedded_movie
+   * @deprecated Use pascalToSnake from './naming' directly for new code
    */
   static toSnakeCase(str: string): string {
-    return str
-      .replace(/([A-Z])/g, '_$1')
-      .toLowerCase()
-      .replace(/^_/, ''); // Remove leading underscore
+    return pascalToSnake(str);
   }
 
   /**
@@ -350,6 +355,203 @@ export class TypeMapper {
 
     // Default: just add 's'
     return lower + 's';
+  }
+
+  /**
+   * Extracts the common semantic suffix from multiple type names
+   * Used for type consolidation to generate shared type names
+   *
+   * @example
+   * extractCommonTypeSuffix(['ArticleAuthor', 'BlogPostAuthor']) // 'Author'
+   * extractCommonTypeSuffix(['LearningPathTopics', 'ArticleTopics']) // 'Topics'
+   * extractCommonTypeSuffix(['UserProfile', 'ProductDetails']) // null (no common suffix)
+   */
+  static extractCommonTypeSuffix(typeNames: string[]): string | null {
+    if (typeNames.length < 2) return null;
+
+    // Find the longest common suffix among all type names
+    const findCommonSuffix = (names: string[]): string => {
+      if (names.length === 0) return '';
+
+      let suffix = '';
+      const shortest = names.reduce((a, b) => a.length < b.length ? a : b);
+
+      // Check each position from the end
+      for (let i = 1; i <= shortest.length; i++) {
+        const char = shortest[shortest.length - i];
+        const allMatch = names.every(name => name[name.length - i] === char);
+
+        if (allMatch) {
+          suffix = char + suffix;
+        } else {
+          break;
+        }
+      }
+
+      return suffix;
+    };
+
+    const commonSuffix = findCommonSuffix(typeNames);
+
+    // Extract the semantic part (must start with uppercase and be at least 3 chars)
+    // Example: "Author" from "thorAuthor", "Topics" from "icsTopics"
+    const semanticMatch = commonSuffix.match(/([A-Z][a-z]*(?:[A-Z][a-z]*)*)$/);
+
+    if (semanticMatch && semanticMatch[1].length >= 3) {
+      return semanticMatch[1];
+    }
+
+    return null;
+  }
+
+  /**
+   * Generates a semantic shared type name for consolidated types
+   * Uses common suffix extraction, field pattern detection, or fallback naming
+   *
+   * @param typeNames - Array of type names being consolidated
+   * @param fields - Set of field names in the consolidated type
+   * @returns A semantic name for the shared type
+   */
+  static generateSharedTypeName(typeNames: string[], fields: Set<string>): string {
+    const fieldList = Array.from(fields);
+
+    // STEP 1: Try to extract common suffix from type names
+    const commonSuffix = this.extractCommonTypeSuffix(typeNames);
+    if (commonSuffix) {
+      // Singularize if it's plural (e.g., "Authors" -> "Author")
+      // Ensure result is PascalCase
+      const singular = this.singularizeWord(commonSuffix);
+      return singular.charAt(0).toUpperCase() + singular.slice(1);
+    }
+
+    // STEP 2: Check if this looks like localized content (has language codes)
+    const languageCodes = ['en', 'es', 'fr', 'de', 'it', 'pt', 'zh', 'ja', 'ko', 'ar', 'ru', 'hi', 'nl'];
+    const hasLanguageFields = fieldList.some(field => languageCodes.includes(field.toLowerCase()));
+    if (hasLanguageFields) {
+      return 'LocalizedContent';
+    }
+
+    // STEP 3: Check for common structural patterns
+    if (fieldList.includes('title') && fieldList.includes('description')) {
+      return 'TitleDescription';
+    }
+    if (fieldList.includes('name') && fieldList.includes('value')) {
+      return 'NameValue';
+    }
+    if (fieldList.includes('key') && fieldList.includes('value')) {
+      return 'KeyValue';
+    }
+    if (fieldList.includes('label') && fieldList.includes('value')) {
+      return 'LabelValue';
+    }
+    if (fieldList.includes('id') && fieldList.includes('name') && fieldList.length === 2) {
+      return 'IdName';
+    }
+    if (fieldList.includes('url') && fieldList.includes('alt')) {
+      return 'ImageRef';
+    }
+    if (fieldList.includes('href') || (fieldList.includes('url') && fieldList.includes('text'))) {
+      return 'Link';
+    }
+
+    // STEP 4: Fallback - use the shortest type name as base and add "Shared"
+    const shortest = typeNames.reduce((a, b) => a.length <= b.length ? a : b);
+    // Extract the last PascalCase word and append "Shared"
+    const lastWordMatch = shortest.match(/([A-Z][a-z]+)$/);
+    if (lastWordMatch) {
+      return `Shared${lastWordMatch[1]}`;
+    }
+
+    return `${shortest}Shared`;
+  }
+
+  /**
+   * Generates an abbreviation from a PascalCase type name
+   * Extracts uppercase letters to create a short prefix
+   *
+   * @param typeName - The PascalCase type name
+   * @returns An abbreviation (e.g., 'LearningPathResource' -> 'LPR')
+   *
+   * @example
+   * abbreviateTypeName('LearningPathResource') // 'LPR'
+   * abbreviateTypeName('CheatSheet') // 'CS'
+   * abbreviateTypeName('EBook') // 'EB'
+   */
+  static abbreviateTypeName(typeName: string): string {
+    // Extract uppercase letters (word boundaries in PascalCase)
+    const upperLetters = typeName.match(/[A-Z]/g);
+    if (!upperLetters || upperLetters.length === 0) {
+      return typeName.substring(0, 3).toUpperCase();
+    }
+    return upperLetters.join('');
+  }
+
+  /**
+   * Generates a clean nested type name from parent type and field name
+   * Uses abbreviated parent name for shorter type names
+   *
+   * @param parentTypeName - The parent type name
+   * @param fieldName - The field name for the nested type
+   * @returns A clean nested type name with abbreviated parent
+   *
+   * @example
+   * generateNestedTypeName('LearningPathResource', 'cheatSheet') // 'LPRCheatSheet'
+   * generateNestedTypeName('LearningPathResource', 'article') // 'LPRArticle'
+   * generateNestedTypeName('LPRArticle', 'contentMetatags') // 'LPRArticleContentMetatags'
+   */
+  static generateNestedTypeName(parentTypeName: string, fieldName: string): string {
+    const fieldPascal = fieldName.charAt(0).toUpperCase() + fieldName.slice(1);
+
+    // Remove "Index" artifacts from parent type name
+    const cleanParent = parentTypeName.replace(/Index/g, '');
+
+    // Check if parent is already abbreviated (all uppercase or short)
+    const isAlreadyAbbreviated = cleanParent === cleanParent.toUpperCase() ||
+                                  cleanParent.length <= 5 ||
+                                  /^[A-Z]{2,5}[A-Z][a-z]/.test(cleanParent); // e.g., LPRArticle
+
+    if (isAlreadyAbbreviated) {
+      // Parent is already abbreviated, just append field name
+      return `${cleanParent}${fieldPascal}`;
+    }
+
+    // Abbreviate the parent type name
+    const abbreviatedParent = this.abbreviateTypeName(cleanParent);
+    return `${abbreviatedParent}${fieldPascal}`;
+  }
+
+  /**
+   * Checks if two sets of field names are identical
+   * Used for type consolidation to determine if types can be merged
+   */
+  static areFieldSetsIdentical(fieldsA: Set<string>, fieldsB: Set<string>): boolean {
+    if (fieldsA.size !== fieldsB.size) return false;
+    for (const field of fieldsA) {
+      if (!fieldsB.has(field)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Generates a field signature for type consolidation
+   * In strict mode, includes field types; in loose mode, only field names
+   *
+   * @param fields - Array of field definitions
+   * @param mode - 'strict' includes types, 'loose' only names
+   * @returns A signature string for comparison
+   */
+  static generateFieldSignature(
+    fields: Array<{ name: string; type: string }>,
+    mode: 'strict' | 'loose' = 'strict'
+  ): string {
+    const sortedFields = [...fields].sort((a, b) => a.name.localeCompare(b.name));
+
+    if (mode === 'loose') {
+      return sortedFields.map(f => f.name).join('|');
+    }
+
+    // Strict mode: include types
+    return sortedFields.map(f => `${f.name}:${f.type}`).join('|');
   }
 }
 

@@ -24,6 +24,7 @@ export default function MongoDBForm({ onBack, onSuccess }: MongoDBFormProps) {
   const [selectedDatabase, setSelectedDatabase] = useState('')
   const [collections, setCollections] = useState<string[]>([])
   const [selectedCollections, setSelectedCollections] = useState<string[]>([])
+  const [smartScan, setSmartScan] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
@@ -138,6 +139,7 @@ export default function MongoDBForm({ onBack, onSuccess }: MongoDBFormProps) {
             database: selectedDatabase,
             collections: selectedCollections.length > 0 ? selectedCollections : undefined,
             name: 'mongodb',
+            smartScan,
           },
         }),
       })
@@ -310,6 +312,23 @@ export default function MongoDBForm({ onBack, onSuccess }: MongoDBFormProps) {
           <p className="form-hint">
             Select specific collections or leave empty to include all collections.
           </p>
+
+          <div className="smart-scan-toggle">
+            <div className="toggle-info">
+              <span className="toggle-label">Smart Scan</span>
+              <span className="toggle-hint">
+                Progressive sampling for better field discovery in schemaless collections
+              </span>
+            </div>
+            <label className="toggle-switch">
+              <input
+                type="checkbox"
+                checked={smartScan}
+                onChange={() => setSmartScan(!smartScan)}
+              />
+              <span className="toggle-slider"></span>
+            </label>
+          </div>
 
           <div className="form-actions">
             <button

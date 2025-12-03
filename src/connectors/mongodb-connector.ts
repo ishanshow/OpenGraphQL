@@ -1,8 +1,16 @@
 import { MongoClient, Db, Collection, ObjectId } from 'mongodb';
 import { BaseConnector } from './base-connector';
-import { EntitySchema, FieldDefinition, MongoDBConfig } from '../types';
-import { TypeMapper } from '../utils/type-mapper';
+import {
+  EntitySchema,
+  FieldDefinition,
+  MongoDBConfig,
+  SmartScanConfig,
+  DEFAULT_SMART_SCAN_CONFIG,
+  TypeHistogramEntry,
+} from '../types';
+import { TypeMapper, collectionNameToTypeName } from '../utils/type-mapper';
 import { Logger } from '../utils/logger';
+import { ConfigLoader } from '../core/config-loader';
 
 export class MongoDBConnector extends BaseConnector {
   private client: MongoClient | null = null;
@@ -11,9 +19,19 @@ export class MongoDBConnector extends BaseConnector {
   private entityToCollectionMap: Map<string, string> = new Map(); // Maps entity name to collection name
   private entitySchemas: Map<string, EntitySchema> = new Map(); // Maps entity name to its schema (for array normalization)
 
+  // SMART_SCAN configuration and caches
+  private smartScanConfig: SmartScanConfig;
+  private arrayTypeCache: Map<string, string> = new Map(); // Caches array element types across documents
+  private nestedStructureCache: Map<string, boolean> = new Map(); // Caches analyzed nested structures
+  private fieldFrequency: Map<string, number> = new Map(); // Tracks field occurrence frequency
+  private discoveredArrayElementFields: Map<string, Set<string>> = new Map(); // Tracks fields in array elements
+  private typeNameMapping: Map<string, string> = new Map(); // Maps original type names to consolidated names
+
   constructor(config: MongoDBConfig) {
     super(config);
     this.config = config;
+    // Load SMART_SCAN configuration from environment variables
+    this.smartScanConfig = ConfigLoader.loadSmartScanConfig();
   }
 
   async connect(): Promise<void> {
@@ -95,8 +113,8 @@ export class MongoDBConnector extends BaseConnector {
   }
 
   /**
-   * Dynamic sampling algorithm that continues sampling until no new fields are discovered
-   * Uses random sampling with replacement to ensure diverse document coverage
+   * Progressive sampling algorithm using escalating sample sizes
+   * Uses configurable sample sizes from SmartScanConfig for better field discovery
    */
   private async dynamicSampling(
     collection: Collection,
@@ -105,138 +123,347 @@ export class MongoDBConnector extends BaseConnector {
     documents: any[];
     totalSampled: number;
     uniqueFieldCount: number;
+    samplingTimeMs: number;
   }> {
-    const INITIAL_BATCH_SIZE = 50;
-    const SUBSEQUENT_BATCH_SIZE = 100;
-    const MAX_SAMPLES = 5000; // Safety limit to prevent excessive scanning
-    const STABLE_ITERATIONS = 2; // Number of iterations with no new fields before stopping
-    
-    // Get total document count for random sampling
+    const startTime = Date.now();
+    const config = this.smartScanConfig;
+    const sampleSizes = config.sampleSizes; // e.g., [500, 1000, 2000, 5000]
+    const earlyTermination = config.earlyTerminationThreshold;
+
+    // Get total document count for sampling decisions
     const totalDocCount = await collection.countDocuments();
     Logger.info(`Collection ${collectionName} has ${totalDocCount} total documents`);
-    
+
     if (totalDocCount === 0) {
-      return { documents: [], totalSampled: 0, uniqueFieldCount: 0 };
+      return { documents: [], totalSampled: 0, uniqueFieldCount: 0, samplingTimeMs: 0 };
     }
-    
+
     const allDocuments: any[] = [];
     const seenFieldPaths = new Set<string>();
+    const seenDocIds = new Set<string>(); // For deduplication
     let totalSampled = 0;
-    let iterationsWithoutNewFields = 0;
-    let iteration = 0;
-    
-    Logger.info(`Starting dynamic sampling for ${collectionName}...`);
-    
-    while (totalSampled < MAX_SAMPLES && iterationsWithoutNewFields < STABLE_ITERATIONS) {
-      iteration++;
-      const batchSize = iteration === 1 ? INITIAL_BATCH_SIZE : SUBSEQUENT_BATCH_SIZE;
-      const remainingSamples = Math.min(batchSize, MAX_SAMPLES - totalSampled);
-      
-      if (remainingSamples <= 0) {
-        break;
+    let consecutiveEmptyIterations = 0;
+
+    Logger.info(`Starting progressive sampling for ${collectionName} with sizes: [${sampleSizes.join(', ')}]`);
+
+    for (let i = 0; i < sampleSizes.length; i++) {
+      const targetSize = sampleSizes[i];
+      const iterationStart = Date.now();
+
+      // Calculate how many new documents we need (accounting for already sampled)
+      const targetNewDocs = Math.min(targetSize, totalDocCount) - totalSampled;
+      if (targetNewDocs <= 0) {
+        continue;
       }
-      
-      // Perform random sampling using aggregation pipeline
+
+      // Over-sample slightly to account for potential duplicates
+      const oversampleSize = Math.min(Math.ceil(targetNewDocs * 1.2), totalDocCount);
+
+      // Perform random sampling
       const batch = await collection.aggregate([
-        { $sample: { size: Math.min(remainingSamples, totalDocCount) } }
+        { $sample: { size: oversampleSize } }
       ]).toArray();
-      
+
       if (batch.length === 0) {
         break;
       }
-      
-      // Track fields before processing this batch
-      const fieldCountBefore = seenFieldPaths.size;
-      
-      // Extract all field paths from the batch
+
+      // Deduplicate and track new documents
+      const newDocs: any[] = [];
       for (const doc of batch) {
-        this.extractFieldPaths(doc, '', seenFieldPaths);
+        const docId = doc._id?.toString();
+        if (docId && !seenDocIds.has(docId)) {
+          seenDocIds.add(docId);
+          newDocs.push(doc);
+        }
       }
-      
+
+      if (newDocs.length === 0) {
+        Logger.debug(`Iteration ${i + 1}: no new unique documents found`);
+        continue;
+      }
+
+      // Track fields before processing
+      const fieldCountBefore = seenFieldPaths.size;
+      const arrayFieldCountBefore = this.getTotalArrayElementFields();
+
+      // Extract field paths and array element fields
+      for (const doc of newDocs) {
+        this.extractFieldPaths(doc, '', seenFieldPaths, 0);
+        this.extractArrayElementFields(doc, '', 0);
+
+        // Track field frequencies if enabled
+        if (config.enableFieldTracking) {
+          this.trackFieldFrequencies(doc, '');
+        }
+      }
+
+      allDocuments.push(...newDocs);
+      totalSampled += newDocs.length;
+
       const newFieldsFound = seenFieldPaths.size - fieldCountBefore;
-      allDocuments.push(...batch);
-      totalSampled += batch.length;
-      
+      const newArrayFields = this.getTotalArrayElementFields() - arrayFieldCountBefore;
+      const totalNewDiscoveries = newFieldsFound + newArrayFields;
+      const iterationTime = Date.now() - iterationStart;
+
       Logger.debug(
-        `Iteration ${iteration}: sampled ${batch.length} docs, ` +
-        `found ${newFieldsFound} new fields (total: ${seenFieldPaths.size} unique fields)`
+        `Iteration ${i + 1}: sampled ${newDocs.length} new docs in ${iterationTime}ms, ` +
+        `found ${newFieldsFound} new fields + ${newArrayFields} new array fields ` +
+        `(total: ${seenFieldPaths.size} unique fields)`
       );
-      
-      if (newFieldsFound === 0) {
-        iterationsWithoutNewFields++;
-        Logger.debug(`No new fields found. Stability counter: ${iterationsWithoutNewFields}/${STABLE_ITERATIONS}`);
+
+      // Check for convergence
+      if (totalNewDiscoveries === 0) {
+        consecutiveEmptyIterations++;
+        Logger.debug(`No new discoveries. Stability counter: ${consecutiveEmptyIterations}/${earlyTermination}`);
+
+        if (consecutiveEmptyIterations >= earlyTermination) {
+          Logger.info(`Schema stabilized after ${i + 1} iterations (${earlyTermination} consecutive with no new fields)`);
+          break;
+        }
       } else {
-        iterationsWithoutNewFields = 0; // Reset counter when new fields are found
+        consecutiveEmptyIterations = 0;
       }
-      
-      // Early exit if we've sampled a significant portion of the collection
+
+      // Early exit if we've sampled most of the collection
       if (totalSampled >= totalDocCount * 0.8) {
-        Logger.info(`Sampled 80% of collection, stopping early`);
+        Logger.info(`Sampled 80% of collection (${totalSampled}/${totalDocCount}), stopping early`);
         break;
       }
     }
-    
-    if (totalSampled >= MAX_SAMPLES) {
-      Logger.warning(`Reached maximum sample limit of ${MAX_SAMPLES} documents`);
-    } else if (iterationsWithoutNewFields >= STABLE_ITERATIONS) {
-      Logger.info(`Schema stabilized after ${iteration} iterations`);
-    }
-    
+
+    const samplingTimeMs = Date.now() - startTime;
+    Logger.info(`Progressive sampling complete: ${totalSampled} documents, ${seenFieldPaths.size} unique fields in ${samplingTimeMs}ms`);
+
     return {
       documents: allDocuments,
       totalSampled,
       uniqueFieldCount: seenFieldPaths.size,
+      samplingTimeMs,
     };
+  }
+
+  /**
+   * Helper to count total array element fields across all tracked arrays
+   */
+  private getTotalArrayElementFields(): number {
+    let total = 0;
+    for (const fields of this.discoveredArrayElementFields.values()) {
+      total += fields.size;
+    }
+    return total;
+  }
+
+  /**
+   * Extracts fields found within array elements for polymorphic array detection
+   * Tracks fields separately from top-level extraction
+   */
+  private extractArrayElementFields(
+    obj: any,
+    parentPath: string,
+    depth: number
+  ): void {
+    if (!obj || typeof obj !== 'object' || depth >= this.smartScanConfig.maxDepth) {
+      return;
+    }
+
+    for (const [key, value] of Object.entries(obj)) {
+      if (key === '__v' || key === '_id') continue;
+      if (this.isNumericKey(key)) continue;
+
+      const currentPath = parentPath ? `${parentPath}.${key}` : key;
+
+      if (Array.isArray(value)) {
+        // Initialize tracking for this array path if not exists
+        if (!this.discoveredArrayElementFields.has(currentPath)) {
+          this.discoveredArrayElementFields.set(currentPath, new Set());
+        }
+
+        const elementFields = this.discoveredArrayElementFields.get(currentPath)!;
+
+        // Analyze multiple elements to discover ALL possible fields (polymorphic arrays)
+        const elementsToCheck = Math.min(value.length, this.smartScanConfig.maxArrayElements);
+        for (let i = 0; i < elementsToCheck; i++) {
+          const element = value[i];
+          if (element && typeof element === 'object' && !Array.isArray(element) && !(element instanceof Date)) {
+            // Collect all field names from this array element
+            Object.keys(element).forEach(field => {
+              if (field !== '__v' && field !== '_id' && !this.isNumericKey(field)) {
+                elementFields.add(field);
+              }
+            });
+
+            // Recursively check nested structures within array elements
+            this.extractArrayElementFields(element, currentPath, depth + 1);
+          }
+        }
+      } else if (value && typeof value === 'object' && !(value instanceof Date)) {
+        // Recursively check nested objects
+        this.extractArrayElementFields(value, currentPath, depth + 1);
+      }
+    }
+  }
+
+  /**
+   * Tracks field occurrence frequency for nullability inference and rare field detection
+   */
+  private trackFieldFrequencies(obj: any, prefix: string): void {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+      return;
+    }
+
+    for (const [key, value] of Object.entries(obj)) {
+      if (key === '__v' || key === '_id') continue;
+
+      const fieldPath = prefix ? `${prefix}.${key}` : key;
+      const currentCount = this.fieldFrequency.get(fieldPath) || 0;
+      this.fieldFrequency.set(fieldPath, currentCount + 1);
+
+      // Recursively track nested fields
+      if (value && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
+        this.trackFieldFrequencies(value, fieldPath);
+      }
+    }
+  }
+
+  /**
+   * Reports fields that appear in less than 5% of documents (rare fields)
+   */
+  private reportRareFields(totalDocuments: number): void {
+    const rareThreshold = totalDocuments * 0.05;
+    const rareFields: Array<{ field: string; count: number; percentage: number }> = [];
+
+    for (const [field, count] of this.fieldFrequency.entries()) {
+      if (count < rareThreshold) {
+        rareFields.push({
+          field,
+          count,
+          percentage: (count / totalDocuments) * 100,
+        });
+      }
+    }
+
+    if (rareFields.length > 0) {
+      Logger.info(`Found ${rareFields.length} rare fields (< 5% occurrence):`);
+      rareFields
+        .sort((a, b) => a.count - b.count)
+        .slice(0, 10) // Show top 10 rarest
+        .forEach(({ field, count, percentage }) => {
+          Logger.debug(`  • ${field}: ${count}/${totalDocuments} docs (${percentage.toFixed(1)}%)`);
+        });
+      if (rareFields.length > 10) {
+        Logger.debug(`  ... and ${rareFields.length - 10} more rare fields`);
+      }
+    }
+  }
+
+  /**
+   * Helper to check if a key is a numeric array index
+   */
+  private isNumericKey(key: string): boolean {
+    return /^\d+$/.test(key);
+  }
+
+  /**
+   * Checks if an object is "array-like" (stored as object with numeric keys)
+   * This handles MongoDB documents where arrays are sometimes stored as objects:
+   * {"0": {...}, "1": {...}, "2": {...}} instead of [{...}, {...}, {...}]
+   *
+   * @returns true if more than half of the object's keys are numeric
+   */
+  private isArrayLikeObject(obj: any): boolean {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+      return false;
+    }
+
+    const keys = Object.keys(obj);
+    if (keys.length === 0) {
+      return false;
+    }
+
+    const numericKeys = keys.filter(key => this.isNumericKey(key));
+    // If more than half the keys are numeric, treat as array-like
+    return numericKeys.length > keys.length / 2;
+  }
+
+  /**
+   * Extracts array elements from an array-like object
+   * Converts {"0": {...}, "1": {...}} to [{...}, {...}]
+   */
+  private extractArrayFromArrayLikeObject(obj: any): any[] {
+    if (!this.isArrayLikeObject(obj)) {
+      return [];
+    }
+
+    const keys = Object.keys(obj)
+      .filter(key => this.isNumericKey(key))
+      .sort((a, b) => parseInt(a) - parseInt(b));
+
+    return keys.map(key => obj[key]);
   }
   
   /**
    * Recursively extracts all field paths from a document
    * Tracks nested field paths using dot notation
+   * Now includes depth limit from SmartScanConfig
    */
   private extractFieldPaths(
     obj: any,
     prefix: string,
-    fieldPaths: Set<string>
+    fieldPaths: Set<string>,
+    depth: number = 0
   ): void {
     if (obj === null || obj === undefined) {
       return;
     }
-    
+
     if (typeof obj !== 'object') {
       return;
     }
-    
+
+    // Check depth limit
+    if (depth >= this.smartScanConfig.maxDepth) {
+      Logger.debug(`Max depth ${this.smartScanConfig.maxDepth} reached at: ${prefix}`);
+      return;
+    }
+
     // Handle arrays
     if (Array.isArray(obj)) {
       if (obj.length > 0) {
-        // Sample the first element to detect array item type
+        // Sample multiple elements (up to maxArrayElements) to detect array item types
         const fieldPath = prefix || 'array';
         fieldPaths.add(`${fieldPath}[]`);
-        this.extractFieldPaths(obj[0], `${fieldPath}[]`, fieldPaths);
+
+        const elementsToSample = Math.min(obj.length, this.smartScanConfig.maxArrayElements);
+        for (let i = 0; i < elementsToSample; i++) {
+          if (obj[i] !== null && obj[i] !== undefined) {
+            this.extractFieldPaths(obj[i], `${fieldPath}[]`, fieldPaths, depth + 1);
+          }
+        }
       }
       return;
     }
-    
+
     // Handle objects
     for (const [key, value] of Object.entries(obj)) {
       // Skip internal MongoDB fields
       if (key.startsWith('__') || key.startsWith('$')) {
         continue;
       }
-      
+
       // Skip binary types
       if (this.isBinaryType(value)) {
         const fieldPath = prefix ? `${prefix}.${key}` : key;
         fieldPaths.add(fieldPath);
         continue;
       }
-      
+
       const fieldPath = prefix ? `${prefix}.${key}` : key;
       fieldPaths.add(fieldPath);
-      
+
       // Recursively process nested objects and arrays
       if (value !== null && typeof value === 'object') {
-        this.extractFieldPaths(value, fieldPath, fieldPaths);
+        this.extractFieldPaths(value, fieldPath, fieldPaths, depth + 1);
       }
     }
   }
@@ -245,20 +472,27 @@ export class MongoDBConnector extends BaseConnector {
     collection: Collection,
     collectionName: string
   ): Promise<{ mainEntity: EntitySchema; nestedTypes: EntitySchema[] }> {
-    // Check if smart_scan is enabled
-    const smartScan = process.env.SMART_SCAN === 'true';
-    
+    // Use smartScanConfig for feature flags
+    const smartScan = this.smartScanConfig.enabled;
+
     let documents: any[];
     let totalSampled: number;
-    
+    let samplingTimeMs = 0;
+
     if (smartScan) {
       Logger.info(`Smart scan enabled for ${collectionName}...`);
       const samplingResult = await this.dynamicSampling(collection, collectionName);
       documents = samplingResult.documents;
       totalSampled = samplingResult.totalSampled;
+      samplingTimeMs = samplingResult.samplingTimeMs;
       Logger.info(`Smart scan completed: sampled ${totalSampled} documents, found ${samplingResult.uniqueFieldCount} unique fields`);
+
+      // Report rare fields if field tracking is enabled
+      if (this.smartScanConfig.enableFieldTracking && totalSampled > 0) {
+        this.reportRareFields(totalSampled);
+      }
     } else {
-      // Default fixed sampling
+      // Default fixed sampling (backward compatible)
       const sampleSize = 500;
       documents = await collection.find().limit(sampleSize).toArray();
       totalSampled = documents.length;
@@ -269,7 +503,7 @@ export class MongoDBConnector extends BaseConnector {
       Logger.warning(`Collection ${collectionName} is empty, creating minimal schema`);
       return {
         mainEntity: {
-          name: TypeMapper.toPascalCase(TypeMapper.singularize(collectionName)),
+          name: collectionNameToTypeName(collectionName),
           fields: [
             {
               name: '_id',
@@ -286,15 +520,15 @@ export class MongoDBConnector extends BaseConnector {
     }
 
     Logger.info(`Analyzing ${documents.length} documents from ${collectionName}...`);
-    
+
     // Debug: Show a sample document structure
     if (documents.length > 0) {
       const sampleKeys = Object.keys(documents[0]);
       Logger.debug(`Sample document has ${sampleKeys.length} keys:`, sampleKeys);
     }
 
-    // Use singular form for the type name
-    const typeName = TypeMapper.toPascalCase(TypeMapper.singularize(collectionName));
+    // Use singular form for the type name (using improved generateNestedTypeName for consistency)
+    const typeName = collectionNameToTypeName(collectionName);
 
     // Track nested types discovered during analysis
     const nestedTypes = new Map<string, EntitySchema>();
@@ -326,6 +560,14 @@ export class MongoDBConnector extends BaseConnector {
     Logger.debug(`Field map after analysis has ${fieldMap.size} fields`);
     Logger.debug(`Discovered ${nestedTypes.size} nested types`);
 
+    // Type consolidation: merge identical nested types if enabled
+    if (smartScan && this.smartScanConfig.consolidateTypes && nestedTypes.size > 1) {
+      this.consolidateNestedTypes(nestedTypes);
+
+      // After consolidation, update all field type references to use consolidated names
+      this.applyTypeNameMappings(fieldMap, nestedTypes);
+    }
+
     // Convert to final schema, removing occurrence tracking
     const fields = Array.from(fieldMap.values()).map(({ occurrences, ...field }) => {
       // Fields are nullable by default
@@ -340,8 +582,11 @@ export class MongoDBConnector extends BaseConnector {
 
     Logger.info(`Final schema has ${fields.length} fields, ${nestedTypes.size} nested types`);
 
-    const scanMethod = smartScan ? 'smart scan' : 'fixed sampling';
-    
+    // Adaptive verification mode
+    if (smartScan && samplingTimeMs > 0) {
+      await this.maybeVerifyFieldDiscovery(collection, collectionName, samplingTimeMs);
+    }
+
     return {
       mainEntity: {
         name: typeName,
@@ -351,6 +596,199 @@ export class MongoDBConnector extends BaseConnector {
       },
       nestedTypes: Array.from(nestedTypes.values()),
     };
+  }
+
+  /**
+   * Consolidates identical nested types into shared types
+   * Uses field signature matching based on consolidation mode (strict/loose)
+   */
+  private consolidateNestedTypes(nestedTypes: Map<string, EntitySchema>): void {
+    const config = this.smartScanConfig;
+    if (config.typeConsolidation === 'none') {
+      return;
+    }
+
+    Logger.debug(`Consolidating ${nestedTypes.size} nested types (mode: ${config.typeConsolidation})`);
+
+    // Group types by their field signature
+    const signatureGroups = new Map<string, string[]>();
+
+    for (const [typeName, schema] of nestedTypes.entries()) {
+      const signature = TypeMapper.generateFieldSignature(
+        schema.fields.map(f => ({ name: f.name, type: f.type })),
+        config.typeConsolidation as 'strict' | 'loose'
+      );
+
+      if (!signatureGroups.has(signature)) {
+        signatureGroups.set(signature, []);
+      }
+      signatureGroups.get(signature)!.push(typeName);
+    }
+
+    // Find groups with multiple types (candidates for consolidation)
+    let consolidatedCount = 0;
+
+    for (const [signature, typeNames] of signatureGroups.entries()) {
+      if (typeNames.length < 2) {
+        continue;
+      }
+
+      // Check if types share a common suffix (required for consolidation)
+      const commonSuffix = TypeMapper.extractCommonTypeSuffix(typeNames);
+      if (!commonSuffix) {
+        Logger.debug(`Skipping consolidation for [${typeNames.join(', ')}] - no common suffix`);
+        continue;
+      }
+
+      // Generate shared type name
+      const fieldNames = new Set<string>();
+      const firstSchema = nestedTypes.get(typeNames[0])!;
+      firstSchema.fields.forEach(f => fieldNames.add(f.name));
+
+      const sharedTypeName = TypeMapper.generateSharedTypeName(typeNames, fieldNames);
+
+      Logger.info(`Consolidating [${typeNames.join(', ')}] -> ${sharedTypeName}`);
+
+      // Create the shared type with merged fields from all original types
+      const mergedFields = new Map<string, FieldDefinition>();
+      for (const typeName of typeNames) {
+        const schema = nestedTypes.get(typeName)!;
+        for (const field of schema.fields) {
+          if (!mergedFields.has(field.name)) {
+            mergedFields.set(field.name, { ...field });
+          }
+        }
+      }
+
+      const sharedSchema: EntitySchema = {
+        name: sharedTypeName,
+        fields: Array.from(mergedFields.values()),
+        description: `Consolidated from: ${typeNames.join(', ')}`,
+        isNested: true,
+      };
+
+      // Remove original types and add shared type
+      for (const typeName of typeNames) {
+        nestedTypes.delete(typeName);
+        this.typeNameMapping.set(typeName, sharedTypeName);
+      }
+
+      nestedTypes.set(sharedTypeName, sharedSchema);
+      consolidatedCount++;
+    }
+
+    if (consolidatedCount > 0) {
+      Logger.info(`Type consolidation: merged ${consolidatedCount} groups, ${nestedTypes.size} types remaining`);
+    }
+  }
+
+  /**
+   * Applies type name mappings to update field references after consolidation
+   * Updates both the main entity fields and all nested type fields
+   */
+  private applyTypeNameMappings(
+    fieldMap: Map<string, FieldDefinition & { occurrences: number }>,
+    nestedTypes: Map<string, EntitySchema>
+  ): void {
+    if (this.typeNameMapping.size === 0) {
+      return;
+    }
+
+    Logger.debug(`Applying ${this.typeNameMapping.size} type name mappings`);
+
+    // Update main entity field types
+    for (const field of fieldMap.values()) {
+      if (this.typeNameMapping.has(field.type)) {
+        const newType = this.typeNameMapping.get(field.type)!;
+        Logger.debug(`Updating field ${field.name}: ${field.type} -> ${newType}`);
+        field.type = newType;
+      }
+    }
+
+    // Update nested type field types
+    for (const schema of nestedTypes.values()) {
+      for (const field of schema.fields) {
+        if (this.typeNameMapping.has(field.type)) {
+          const newType = this.typeNameMapping.get(field.type)!;
+          Logger.debug(`Updating nested field ${schema.name}.${field.name}: ${field.type} -> ${newType}`);
+          field.type = newType;
+        }
+      }
+    }
+  }
+
+  /**
+   * Adaptive verification mode - runs verification if overhead is acceptable
+   */
+  private async maybeVerifyFieldDiscovery(
+    collection: Collection,
+    collectionName: string,
+    samplingTimeMs: number
+  ): Promise<void> {
+    const verifyMode = this.smartScanConfig.verificationMode;
+
+    // Skip if verification is explicitly disabled
+    if (verifyMode === 'false') {
+      return;
+    }
+
+    // For 'auto' mode, check if verification would be within 10% overhead
+    const MAX_OVERHEAD_PERCENT = 10;
+    const verificationStart = Date.now();
+
+    // Quick sample for verification
+    const verificationSample = await collection.aggregate([
+      { $sample: { size: 100 } }
+    ]).toArray();
+
+    const verificationTimeMs = Date.now() - verificationStart;
+
+    // Check overhead for auto mode
+    if (verifyMode === 'auto') {
+      const overheadPercent = (verificationTimeMs / samplingTimeMs) * 100;
+      if (overheadPercent > MAX_OVERHEAD_PERCENT) {
+        Logger.debug(
+          `Verification skipped: ${overheadPercent.toFixed(1)}% overhead exceeds ${MAX_OVERHEAD_PERCENT}% limit`
+        );
+        return;
+      }
+    }
+
+    // Perform verification
+    const verificationFields = new Set<string>();
+    for (const doc of verificationSample) {
+      this.extractFieldPaths(doc, '', verificationFields, 0);
+    }
+
+    // Compare with discovered fields (check if we have discoveredArrayElementFields populated)
+    const allDiscoveredFields = new Set<string>();
+
+    // Add array element fields as well
+    for (const [arrayPath, fields] of this.discoveredArrayElementFields.entries()) {
+      allDiscoveredFields.add(arrayPath);
+      for (const field of fields) {
+        allDiscoveredFields.add(`${arrayPath}.${field}`);
+      }
+    }
+
+    // Check for missed fields (simplified - just log a warning)
+    const missedFields: string[] = [];
+    for (const field of verificationFields) {
+      // Only check top-level fields for now
+      if (!field.includes('[]') && !allDiscoveredFields.has(field)) {
+        // This is a simplification - actual implementation would need more sophisticated tracking
+        missedFields.push(field);
+      }
+    }
+
+    if (missedFields.length > 0) {
+      Logger.warning(
+        `Verification: found ${missedFields.length} potentially undiscovered fields in ${collectionName}`
+      );
+      Logger.debug(`Potentially missed fields: ${missedFields.slice(0, 5).join(', ')}${missedFields.length > 5 ? '...' : ''}`);
+    } else {
+      Logger.debug(`Verification passed for ${collectionName} (${verificationTimeMs}ms)`);
+    }
   }
 
   /**
@@ -393,7 +831,7 @@ export class MongoDBConnector extends BaseConnector {
           if (firstElement && typeof firstElement === 'object' && !Array.isArray(firstElement) &&
               !(firstElement instanceof Date) && firstElement.constructor?.name !== 'ObjectId') {
 
-            const nestedTypeName = `${typeName}${TypeMapper.toPascalCase(fieldName)}`;
+            const nestedTypeName = TypeMapper.generateNestedTypeName(typeName, fieldName);
             Logger.info(`✨ Discovered sparse field "${fieldName}" with nested type ${nestedTypeName}`);
 
             // Create nested type
@@ -459,6 +897,13 @@ export class MongoDBConnector extends BaseConnector {
         continue;
       }
 
+      // Skip numeric keys - these are array indices stored as object keys
+      // This handles MongoDB documents where arrays are stored as objects: {"0": {...}, "1": {...}}
+      if (this.isNumericKey(key)) {
+        Logger.debug(`Skipping numeric key '${key}' in ${parentTypeName} (array index)`);
+        continue;
+      }
+
       const sanitizedName = TypeMapper.sanitizeFieldName(key);
 
       if (value === null || value === undefined) {
@@ -478,14 +923,25 @@ export class MongoDBConnector extends BaseConnector {
         continue;
       }
 
-      const isArray = Array.isArray(value);
-      const valueToAnalyze = isArray && value.length > 0 ? value[0] : value;
+      // Check if this is an array-like object (stored as {"0": {...}, "1": {...}})
+      // Convert to actual array for consistent handling
+      let actualValue: any = value;
+      let isArray = Array.isArray(value);
+
+      if (!isArray && this.isArrayLikeObject(value)) {
+        // Convert array-like object to array
+        actualValue = this.extractArrayFromArrayLikeObject(value);
+        isArray = true;
+        Logger.debug(`Converted array-like object to array for field '${key}' in ${parentTypeName}`);
+      }
+
+      const valueToAnalyze = isArray && (actualValue as any[]).length > 0 ? (actualValue as any[])[0] : actualValue;
 
       // Determine the GraphQL type
       let type: string;
       let shouldCreateNestedType = false;
 
-      if (isArray && value.length === 0) {
+      if (isArray && actualValue.length === 0) {
         type = 'JSON'; // Unknown array type
       } else if (this.isBinaryType(valueToAnalyze)) {
         // Binary/Buffer types should be treated as JSON or String, not expanded
@@ -501,7 +957,7 @@ export class MongoDBConnector extends BaseConnector {
         
         if (objectKeys.length > 0 && !this.isBinaryType(valueToAnalyze)) {
           // Create a nested type (but not for binary buffers)
-          const nestedTypeName = `${parentTypeName}${TypeMapper.toPascalCase(key)}`;
+          const nestedTypeName = TypeMapper.generateNestedTypeName(parentTypeName, key);
           type = nestedTypeName;
           shouldCreateNestedType = true;
 
@@ -683,7 +1139,7 @@ export class MongoDBConnector extends BaseConnector {
     if (!doc) return doc;
 
     const converted = { ...doc };
-    
+
     // Convert ObjectId to string
     if (converted._id) {
       converted._id = converted._id.toString();
@@ -710,21 +1166,54 @@ export class MongoDBConnector extends BaseConnector {
       }
     }
 
-    // Normalize array fields based on schema
+    // Normalize array fields based on schema (main entity)
     // This handles cases where MongoDB has inconsistent types (e.g., some docs have string, others have array)
     const entitySchema = this.entitySchemas.get(entityName);
     if (entitySchema) {
-      for (const field of entitySchema.fields) {
-        if (field.isArray && converted[field.name] !== undefined && converted[field.name] !== null) {
-          // If the field should be an array but isn't, wrap it
-          if (!Array.isArray(converted[field.name])) {
-            converted[field.name] = [converted[field.name]];
-          }
-        }
-      }
+      this.normalizeArrayFields(converted, entitySchema);
     }
 
     return converted;
+  }
+
+  /**
+   * Recursively normalizes array fields in a document based on schema
+   * Ensures array fields are always arrays (not null, undefined, or single values)
+   */
+  private normalizeArrayFields(obj: any, schema: EntitySchema): void {
+    if (!obj || typeof obj !== 'object') return;
+
+    for (const field of schema.fields) {
+      const value = obj[field.name];
+
+      // Handle array fields
+      if (field.isArray) {
+        if (value === null || value === undefined) {
+          // Return empty array for null/undefined array fields
+          obj[field.name] = [];
+        } else if (!Array.isArray(value)) {
+          // Wrap single values in an array
+          obj[field.name] = [value];
+        }
+      }
+
+      // Recursively process nested objects
+      // Check if this field's type is a nested type we have a schema for
+      const nestedSchema = this.entitySchemas.get(field.type);
+      if (nestedSchema && value !== null && value !== undefined) {
+        if (Array.isArray(obj[field.name])) {
+          // Normalize each element in the array
+          for (const item of obj[field.name]) {
+            if (item && typeof item === 'object') {
+              this.normalizeArrayFields(item, nestedSchema);
+            }
+          }
+        } else if (typeof obj[field.name] === 'object') {
+          // Normalize nested object
+          this.normalizeArrayFields(obj[field.name], nestedSchema);
+        }
+      }
+    }
   }
 
   /**

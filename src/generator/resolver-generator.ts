@@ -1,6 +1,6 @@
 import { BaseConnector } from '../connectors/base-connector';
 import { IntrospectionResult } from '../types';
-import { TypeMapper } from '../utils/type-mapper';
+import { TypeMapper, pascalToSnake } from '../utils/type-mapper';
 import { Logger } from '../utils/logger';
 import { GraphQLError } from 'graphql';
 
@@ -188,22 +188,26 @@ export class ResolverGenerator {
   }
 
   /**
-   * Generates a list query name
+   * Generates a list query name (snake_case format with proper pluralization)
    */
   private generateListQueryName(entityName: string, dataSourceName: string): string {
-    const singularCamel = TypeMapper.toCamelCase(entityName);
-    const pluralName = TypeMapper.pluralize(singularCamel);
-    const sanitizedDsName = TypeMapper.toCamelCase(dataSourceName);
-    return `${sanitizedDsName}_${pluralName}`;
+    // Convert to snake_case first (preserves word boundaries), then singularize and pluralize
+    const snakeName = pascalToSnake(entityName);
+    const singularSnake = TypeMapper.singularize(snakeName);
+    const pluralSnake = TypeMapper.pluralize(singularSnake);
+    const sanitizedDsName = dataSourceName.toLowerCase();
+    return `${sanitizedDsName}_${pluralSnake}`;
   }
 
   /**
-   * Generates a single query name
+   * Generates a single query name (snake_case format with proper singularization)
    */
   private generateSingleQueryName(entityName: string, dataSourceName: string): string {
-    const singularCamel = TypeMapper.toCamelCase(entityName);
-    const sanitizedDsName = TypeMapper.toCamelCase(dataSourceName);
-    return `${sanitizedDsName}_${singularCamel}`;
+    // Convert to snake_case first (preserves word boundaries), then singularize
+    const snakeName = pascalToSnake(entityName);
+    const singularSnake = TypeMapper.singularize(snakeName);
+    const sanitizedDsName = dataSourceName.toLowerCase();
+    return `${sanitizedDsName}_${singularSnake}`;
   }
 }
 

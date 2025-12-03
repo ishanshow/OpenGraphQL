@@ -272,6 +272,8 @@ app.post('/api/generate', async (req: Request, res: Response) => {
         } else {
           delete process.env.MONGODB_COLLECTIONS;
         }
+        // Set SMART_SCAN based on frontend toggle
+        process.env.SMART_SCAN = config.smartScan ? 'true' : 'false';
         break;
       
       case 'postgres':

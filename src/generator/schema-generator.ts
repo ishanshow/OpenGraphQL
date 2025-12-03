@@ -1,5 +1,5 @@
 import { EntitySchema, FieldDefinition, IntrospectionResult } from '../types';
-import { TypeMapper } from '../utils/type-mapper';
+import { TypeMapper, pascalToSnake } from '../utils/type-mapper';
 
 export class SchemaGenerator {
   private customScalars: Set<string> = new Set(['JSON']);
@@ -220,23 +220,27 @@ export class SchemaGenerator {
 
   /**
    * Generates a list query name (e.g., mongodb_movies, postgres_products)
+   * Uses snake_case for query names with proper pluralization
    */
   private generateListQueryName(entityName: string, dataSourceName: string): string {
-    // EntityName is singular (e.g., "Movie"), convert to camelCase then pluralize
-    const singularCamel = TypeMapper.toCamelCase(entityName);
-    const pluralName = TypeMapper.pluralize(singularCamel);
-    const sanitizedDsName = TypeMapper.toCamelCase(dataSourceName);
-    return `${sanitizedDsName}_${pluralName}`;
+    // Convert to snake_case first (preserves word boundaries), then singularize and pluralize
+    const snakeName = pascalToSnake(entityName);
+    const singularSnake = TypeMapper.singularize(snakeName);
+    const pluralSnake = TypeMapper.pluralize(singularSnake);
+    const sanitizedDsName = dataSourceName.toLowerCase();
+    return `${sanitizedDsName}_${pluralSnake}`;
   }
 
   /**
    * Generates a single query name (e.g., mongodb_movie, postgres_product)
+   * Uses snake_case for query names with proper singularization
    */
   private generateSingleQueryName(entityName: string, dataSourceName: string): string {
-    // EntityName is singular (e.g., "Movie"), just convert to camelCase
-    const singularCamel = TypeMapper.toCamelCase(entityName);
-    const sanitizedDsName = TypeMapper.toCamelCase(dataSourceName);
-    return `${sanitizedDsName}_${singularCamel}`;
+    // Convert to snake_case first (preserves word boundaries), then singularize
+    const snakeName = pascalToSnake(entityName);
+    const singularSnake = TypeMapper.singularize(snakeName);
+    const sanitizedDsName = dataSourceName.toLowerCase();
+    return `${sanitizedDsName}_${singularSnake}`;
   }
 
   /**

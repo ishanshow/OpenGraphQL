@@ -1,4 +1,11 @@
-import { GeneratorConfig, DataSourceConfig } from '../types';
+import {
+  GeneratorConfig,
+  DataSourceConfig,
+  SmartScanConfig,
+  DEFAULT_SMART_SCAN_CONFIG,
+  TypeConsolidationMode,
+  VerificationMode
+} from '../types';
 import { Logger } from '../utils/logger';
 import * as dotenv from 'dotenv';
 
@@ -161,6 +168,88 @@ export class ConfigLoader {
       default:
         throw new Error(`Unsupported data source type: ${(ds as any).type}`);
     }
+  }
+
+  /**
+   * Loads SMART_SCAN configuration from environment variables
+   * All settings have sensible defaults for backward compatibility
+   */
+  static loadSmartScanConfig(): SmartScanConfig {
+    // Use override: true so .env file takes precedence over shell environment variables
+    dotenv.config({ override: true });
+
+    const config: SmartScanConfig = { ...DEFAULT_SMART_SCAN_CONFIG };
+
+    // Core toggle
+    config.enabled = process.env.SMART_SCAN === 'true';
+
+    // Sample sizes (comma-separated list of numbers)
+    if (process.env.SMART_SCAN_SAMPLE_SIZES) {
+      const sizes = process.env.SMART_SCAN_SAMPLE_SIZES
+        .split(',')
+        .map(s => parseInt(s.trim(), 10))
+        .filter(n => !isNaN(n) && n > 0);
+      if (sizes.length > 0) {
+        config.sampleSizes = sizes;
+      }
+    }
+
+    // Max depth
+    if (process.env.SMART_SCAN_MAX_DEPTH) {
+      const depth = parseInt(process.env.SMART_SCAN_MAX_DEPTH, 10);
+      if (!isNaN(depth) && depth > 0) {
+        config.maxDepth = depth;
+      }
+    }
+
+    // Max array elements
+    if (process.env.SMART_SCAN_MAX_ARRAY_ELEMENTS) {
+      const maxElements = parseInt(process.env.SMART_SCAN_MAX_ARRAY_ELEMENTS, 10);
+      if (!isNaN(maxElements) && maxElements > 0) {
+        config.maxArrayElements = maxElements;
+      }
+    }
+
+    // Early termination threshold
+    if (process.env.SMART_SCAN_EARLY_TERMINATION) {
+      const threshold = parseInt(process.env.SMART_SCAN_EARLY_TERMINATION, 10);
+      if (!isNaN(threshold) && threshold > 0) {
+        config.earlyTerminationThreshold = threshold;
+      }
+    }
+
+    // Type consolidation mode
+    if (process.env.SMART_SCAN_TYPE_CONSOLIDATION) {
+      const mode = process.env.SMART_SCAN_TYPE_CONSOLIDATION.toLowerCase();
+      if (mode === 'strict' || mode === 'loose' || mode === 'none') {
+        config.typeConsolidation = mode as TypeConsolidationMode;
+      }
+    }
+
+    // Verification mode
+    if (process.env.SMART_SCAN_VERIFY) {
+      const mode = process.env.SMART_SCAN_VERIFY.toLowerCase();
+      if (mode === 'true' || mode === 'false' || mode === 'auto') {
+        config.verificationMode = mode as VerificationMode;
+      }
+    }
+
+    // Field tracking
+    if (process.env.SMART_SCAN_FIELD_TRACKING !== undefined) {
+      config.enableFieldTracking = process.env.SMART_SCAN_FIELD_TRACKING !== 'false';
+    }
+
+    // Type consolidation toggle
+    if (process.env.SMART_SCAN_CONSOLIDATE_TYPES !== undefined) {
+      config.consolidateTypes = process.env.SMART_SCAN_CONSOLIDATE_TYPES !== 'false';
+    }
+
+    // Log configuration in debug mode
+    if (process.env.DEBUG === 'true' && config.enabled) {
+      Logger.debug('SMART_SCAN configuration:', config);
+    }
+
+    return config;
   }
 
 }
